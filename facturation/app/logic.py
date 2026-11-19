@@ -12,7 +12,8 @@ KIND_PATTERN_KEYS = {"facture": "invoice", "avoir": "avoir", "devis": "devis"}
 
 SELLER_KEYS = ["company_name", "company_trade_name", "address", "post_code", "city", "siren", "siret",
                "vat_number", "ape", "email", "phone", "iban", "bic", "rcs_rm", "insurance",
-               "late_penalty", "recovery_fee", "discount_terms", "footer_note",
+               "late_penalty", "recovery_fee", "discount_terms", "footer_note", "logo_path",
+               "default_penalty_rate", "default_discount_rate",
                "pdp_address_scheme", "pdp_address_value"]
 CLIENT_KEYS = ["kind", "name", "siren", "vat_number", "address", "post_code", "city", "country",
                "email", "phone", "pdp_address_scheme", "pdp_address_value"]
@@ -87,38 +88,102 @@ def credited_amount(conn, doc_id):
     return money(r["s"])
 
 
+from calc import PAYMENT_TERMS  # noqa: E402
+PAYMENT_TERMS_LABEL = dict(PAYMENT_TERMS)
+LINE_KINDS = ("item", "title", "subtotal", "comment", "page")
+
+
+def _end_of_month(dt):
+    nxt = date(dt.year + (dt.month == 12), dt.month % 12 + 1, 1)
+    return nxt - timedelta(days=1)
+
+
+def due_date_for(issue: str, terms: str) -> str:
+    """Date d'échéance selon les conditions de règlement (codes MonAE : 30-inv, 30fm10-inv…)."""
+    dt = date.fromisoformat(issue[:10])
+    code = (terms or "30-inv").replace("-inv", "")
+    m = re.fullmatch(r"(\d+)(fm)?(\d+)?", code)
+    if not m:
+        return (dt + timedelta(days=30)).isoformat()
+    days, fm, day = int(m.group(1)), m.group(2), m.group(3)
+    dt = dt + timedelta(days=days)
+    if fm:
+        dt = _end_of_month(dt)
+        if day:
+            nxt = dt + timedelta(days=1)
+            dt = date(nxt.year, nxt.month, min(int(day), 28))
+    return dt.isoformat()
+
+
+def clean_lines(lines, default_nature="bnc"):
+    clean = []
+    for i, ln in enumerate(lines):
+        kind = (ln.get("kind") or "item").strip()
+        if kind not in LINE_KINDS:
+            kind = "item"
+        title = (ln.get("designation") or "").strip()
+        if kind in ("title", "comment") and not title:
+            continue
+        if kind == "item" and not title:
+            continue
+        item = kind == "item"
+        clean.append({
+            "position": len(clean), "kind": kind,
+            "designation": title or ("Sous-total" if kind == "subtotal" else ""),
+            "description": (ln.get("description") or "").strip() if item else "",
+            "quantity": float(d(ln.get("quantity") or 1)) if item else 0.0,
+            "unit": (ln.get("unit") or "u").strip() if item else "",
+            "unit_price": float(d(ln.get("unit_price") or 0)) if item else 0.0,
+            "vat_rate": float(d(ln.get("vat_rate") or 0)) if item else 0.0,
+            "nature": (ln.get("nature") or default_nature) if item else None,
+        })
+    return clean
+
+
+def insert_lines(conn, doc_id, lines):
+    for ln in lines:
+        conn.execute(
+            "INSERT INTO lines(document_id, position, kind, designation, description, quantity, unit, unit_price, "
+            "vat_rate, nature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (doc_id, ln["position"], ln.get("kind") or "item", ln["designation"], ln.get("description") or "",
+             ln["quantity"], ln.get("unit") or "", ln["unit_price"], ln["vat_rate"], ln.get("nature")))
+
+
+def _rate(v):
+    v = (str(v) if v is not None else "").replace(",", ".").replace("%", "").strip()
+    return float(v) if v else None
+
+
 def save_document(conn, doc_id, form, lines):
     """Crée ou met à jour un document modifiable (brouillon ou devis)."""
     kind = form["kind"]
     if doc_id:
         doc, _ = get_doc(conn, doc_id)
         if doc["kind"] in ("facture", "avoir") and doc["status"] != "brouillon":
-            raise BusinessError("Une facture émise ne peut plus être modifiée : faites un avoir.")
-    clean = []
-    for i, ln in enumerate(lines):
-        if not (ln.get("designation") or "").strip():
-            continue
-        clean.append({
-            "position": i, "designation": ln["designation"].strip(),
-            "description": (ln.get("description") or "").strip(),
-            "quantity": float(d(ln.get("quantity") or 1)), "unit": (ln.get("unit") or "u").strip(),
-            "unit_price": float(d(ln.get("unit_price") or 0)), "vat_rate": float(d(ln.get("vat_rate") or 0)),
-        })
-    if not clean:
-        raise BusinessError("Ajoutez au moins une ligne.")
+            raise BusinessError("Une facture émise ne peut plus être modifiée : supprimez-la (un avoir sera créé).")
+    s = db.get_settings(conn)
+    clean = clean_lines(lines, s.get("default_nature") or "bnc")
+    if not any(ln["kind"] == "item" for ln in clean):
+        raise BusinessError("Ajoutez au moins une ligne de prestation.")
     if not form.get("client_id"):
         raise BusinessError("Choisissez un client.")
     t = totals(clean)
+    issue = form.get("issue_date") or date.today().isoformat()
+    terms = form.get("payment_terms") or s.get("default_payment_terms") or "30-inv"
     values = {
-        "kind": kind, "client_id": int(form["client_id"]),
-        "issue_date": form.get("issue_date") or date.today().isoformat(),
-        "due_date": form.get("due_date") or None, "validity_date": form.get("validity_date") or None,
+        "kind": kind, "client_id": int(form["client_id"]), "issue_date": issue,
+        "payment_terms": terms,
+        "due_date": (form.get("due_date") or due_date_for(issue, terms)) if kind == "facture" else None,
+        "validity_date": form.get("validity_date") or None,
+        "penalty_rate": _rate(form.get("penalty_rate")), "discount_rate": _rate(form.get("discount_rate")),
         "service_date": form.get("service_date") or None, "subject": form.get("subject") or None,
         "notes": form.get("notes") or None, "total_ht": float(t["ht"]), "total_tva": float(t["tva"]),
         "total_ttc": float(t["ttc"]),
         "avoir_of_id": int(form["avoir_of_id"]) if form.get("avoir_of_id") else None,
         "source_devis_id": int(form["source_devis_id"]) if form.get("source_devis_id") else None,
     }
+    if form.get("auto_due") == "1" and kind == "facture":
+        values["due_date"] = due_date_for(issue, terms)
     if doc_id:
         sets = ", ".join(f"{k} = ?" for k in values)
         conn.execute(f"UPDATE documents SET {sets} WHERE id = ?", (*values.values(), doc_id))
@@ -130,12 +195,7 @@ def save_document(conn, doc_id, form, lines):
         cols = ", ".join(values)
         qs = ", ".join("?" for _ in values)
         doc_id = conn.execute(f"INSERT INTO documents ({cols}) VALUES ({qs})", tuple(values.values())).lastrowid
-    for ln in clean:
-        conn.execute(
-            "INSERT INTO lines(document_id, position, designation, description, quantity, unit, unit_price, vat_rate)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (doc_id, ln["position"], ln["designation"], ln["description"], ln["quantity"], ln["unit"],
-             ln["unit_price"], ln["vat_rate"]))
+    insert_lines(conn, doc_id, clean)
     doc, lines_ = get_doc(conn, doc_id)
     if kind == "devis":
         render_pdf(conn, doc, lines_)
@@ -209,9 +269,9 @@ def validate_document(conn, doc_id):
                             "la numérotation doit rester chronologique.")
     number = next_number(conn, doc["kind"], issue)
     due = doc["due_date"]
-    if doc["kind"] == "facture" and not due:
+    if doc["kind"] == "facture" and (not due or due < issue):
         s = db.get_settings(conn)
-        due = (date.fromisoformat(issue) + timedelta(days=int(s.get("payment_days") or 30))).isoformat()
+        due = due_date_for(issue, doc.get("payment_terms") or s.get("default_payment_terms") or "30-inv")
     conn.execute(
         "UPDATE documents SET number = ?, status = 'emise', issue_date = ?, due_date = ?, seller_snapshot = ?, "
         "client_snapshot = ?, validated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -230,7 +290,9 @@ def duplicate_as(conn, src_id, kind, avoir=False):
     today = date.today().isoformat()
     vals = {"kind": kind, "status": "brouillon", "client_id": src["client_id"], "issue_date": today,
             "subject": src["subject"], "service_date": src["service_date"], "notes": None,
-            "total_ht": src["total_ht"], "total_tva": src["total_tva"], "total_ttc": src["total_ttc"]}
+            "total_ht": src["total_ht"], "total_tva": src["total_tva"], "total_ttc": src["total_ttc"],
+            "payment_terms": src.get("payment_terms"), "penalty_rate": src.get("penalty_rate"),
+            "discount_rate": src.get("discount_rate")}
     if avoir:
         vals["avoir_of_id"] = src_id
         vals["subject"] = f"Avoir sur facture {src['number']}"
@@ -239,13 +301,182 @@ def duplicate_as(conn, src_id, kind, avoir=False):
     cols = ", ".join(vals)
     new_id = conn.execute(f"INSERT INTO documents ({cols}) VALUES ({', '.join('?' for _ in vals)})",
                           tuple(vals.values())).lastrowid
-    for ln in lines:
-        conn.execute(
-            "INSERT INTO lines(document_id, position, designation, description, quantity, unit, unit_price, vat_rate)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (new_id, ln["position"], ln["designation"], ln["description"], ln["quantity"], ln["unit"],
-             ln["unit_price"], ln["vat_rate"]))
+    insert_lines(conn, new_id, lines)
     return new_id
+
+
+def cancel_invoice(conn, doc_id):
+    """« Supprimer » une facture émise : crée et émet automatiquement l'avoir total correspondant."""
+    doc, lines = get_doc(conn, doc_id)
+    if doc["kind"] != "facture" or doc["status"] == "brouillon":
+        raise BusinessError("Seule une facture émise s'annule par avoir.")
+    if doc.get("cancelled_by_id"):
+        raise BusinessError("Cette facture est déjà annulée.")
+    remaining = money(doc["total_ttc"]) - credited_amount(conn, doc_id)
+    if remaining <= 0:
+        raise BusinessError("Cette facture est déjà entièrement couverte par des avoirs.")
+    avoir_id = duplicate_as(conn, doc_id, "avoir", avoir=True)
+    if remaining < money(doc["total_ttc"]):
+        # avoirs partiels déjà émis : un seul avoir du solde, au taux principal
+        conn.execute("DELETE FROM lines WHERE document_id = ?", (avoir_id,))
+        bd = vat_breakdown(lines)
+        rate = max(bd, key=lambda x: x[1])[0] if bd else 20
+        base = money(remaining * 100 / (100 + d(rate)))
+        insert_lines(conn, avoir_id, [{"position": 0, "kind": "item", "designation": f"Solde de la facture {doc['number']}",
+                                       "description": "", "quantity": 1.0, "unit": "u", "unit_price": float(base),
+                                       "vat_rate": float(rate), "nature": None}])
+        t = totals(get_doc(conn, avoir_id)[1])
+        conn.execute("UPDATE documents SET total_ht=?, total_tva=?, total_ttc=? WHERE id=?",
+                     (float(t["ht"]), float(t["tva"]), float(t["ttc"]), avoir_id))
+    conn.execute("UPDATE documents SET subject = ?, issue_date = ? WHERE id = ?",
+                 (f"Annulation de la facture {doc['number']}", max(date.today().isoformat(), doc["issue_date"]),
+                  avoir_id))
+    validate_document(conn, avoir_id)
+    conn.execute("UPDATE documents SET cancelled_by_id = ? WHERE id = ?", (avoir_id, doc_id))
+    # si la facture avait été encaissée, l'avoir est à rembourser ; sinon il solde la facture
+    refresh_status(conn, doc_id)
+    db.log(conn, "info", f"Facture {doc['number']} annulée par avoir.")
+    return avoir_id
+
+
+def neighbours(conn, doc):
+    """Documents précédent / suivant du même type (ordre chronologique)."""
+    key = (doc["issue_date"] or "", doc["id"])
+    prev = conn.execute(
+        "SELECT id, number FROM documents WHERE kind = ? AND (COALESCE(issue_date,'') < ? OR "
+        "(COALESCE(issue_date,'') = ? AND id < ?)) ORDER BY COALESCE(issue_date,'') DESC, id DESC LIMIT 1",
+        (doc["kind"], key[0], key[0], key[1])).fetchone()
+    nxt = conn.execute(
+        "SELECT id, number FROM documents WHERE kind = ? AND (COALESCE(issue_date,'') > ? OR "
+        "(COALESCE(issue_date,'') = ? AND id > ?)) ORDER BY COALESCE(issue_date,'') ASC, id ASC LIMIT 1",
+        (doc["kind"], key[0], key[0], key[1])).fetchone()
+    return prev, nxt
+
+
+# -- fournisseurs et achats récurrents ---------------------------------------------
+
+def add_months(iso, months):
+    dt = date.fromisoformat(iso[:10])
+    m = dt.month - 1 + months
+    y = dt.year + m // 12
+    m = m % 12 + 1
+    last = _end_of_month(date(y, m, 1)).day
+    return date(y, m, min(dt.day, last)).isoformat()
+
+
+def generate_recurring(conn, today=None):
+    """Crée les dépenses des achats récurrents arrivés à échéance."""
+    today = today or date.today().isoformat()
+    n = 0
+    for r in conn.execute("SELECT * FROM recurring_purchases WHERE active = 1 AND next_date <= ?", (today,)).fetchall():
+        nxt, occ = r["next_date"], r["occurrences"]
+        sup = conn.execute("SELECT name FROM suppliers WHERE id = ?", (r["supplier_id"],)).fetchone()
+        while nxt <= today and (not r["max_occurrences"] or occ < r["max_occurrences"]):
+            conn.execute(
+                "INSERT INTO purchases(supplier, supplier_id, invoice_date, description, total_ht, total_tva, total_ttc,"
+                " category, nature, method, paid_date, deduction_date, source, recurring_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'recurrent', ?)",
+                (sup["name"] if sup else "Fournisseur", r["supplier_id"], nxt, r["title"], r["total_ht"], r["total_tva"],
+                 r["total_ttc"], r["category"], r["nature"], r["method"], nxt if r["auto_paid"] else None,
+                 nxt if r["auto_paid"] else None, r["id"]))
+            occ += 1
+            n += 1
+            nxt = add_months(nxt, r["every_months"] or 1)
+        active = 0 if r["max_occurrences"] and occ >= r["max_occurrences"] else 1
+        conn.execute("UPDATE recurring_purchases SET next_date = ?, occurrences = ?, active = ? WHERE id = ?",
+                     (nxt, occ, active, r["id"]))
+    if n:
+        db.log(conn, "info", f"{n} dépense(s) récurrente(s) créée(s).")
+    return n
+
+
+def move_clients_to_suppliers(conn, client_ids):
+    moved = 0
+    for cid in client_ids:
+        c = conn.execute("SELECT * FROM clients WHERE id = ?", (cid,)).fetchone()
+        if not c:
+            continue
+        if conn.execute("SELECT 1 FROM documents WHERE client_id = ?", (cid,)).fetchone():
+            continue  # déjà facturé : c'est bien un client
+        sup = conn.execute("SELECT id FROM suppliers WHERE lower(name) = lower(?)", (c["name"],)).fetchone()
+        if not sup:
+            conn.execute("INSERT INTO suppliers(name, siren, vat_number, address, post_code, city, country, email, phone,"
+                         " notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (c["name"], c["siren"], c["vat_number"], c["address"], c["post_code"], c["city"],
+                          c["country"] or "FR", c["email"], c["phone"], c["notes"]))
+        conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
+        moved += 1
+    return moved
+
+
+def supplier_id_for(conn, name, siren=None):
+    name = (name or "").strip() or "Fournisseur"
+    row = None
+    if siren:
+        row = conn.execute("SELECT id FROM suppliers WHERE siren = ?", (siren,)).fetchone()
+    row = row or conn.execute("SELECT id FROM suppliers WHERE lower(name) = lower(?)", (name,)).fetchone()
+    if row:
+        return row["id"]
+    return conn.execute("INSERT INTO suppliers(name, siren) VALUES (?, ?)", (name, siren)).lastrowid
+
+
+# -- tâches -------------------------------------------------------------------
+
+def tasks(conn, today=None):
+    """Tâches à cocher : TVA du mois précédent, URSSAF du trimestre précédent."""
+    from calc import compute_period, compute_urssaf, previous_period, previous_quarter, quarter_bounds
+    today = today or date.today()
+    s = db.get_settings(conn)
+    out = []
+    done = {r["task"] for r in conn.execute("SELECT task FROM tasks_done").fetchall()}
+    first = conn.execute("SELECT MIN(issue_date) m FROM documents WHERE kind='facture' AND status!='brouillon'"
+                         ).fetchone()["m"]
+    if not first:
+        return out
+    period = previous_period(today)
+    declared = conn.execute("SELECT 1 FROM declarations WHERE period = ? AND declared_at IS NOT NULL",
+                            (period,)).fetchone()
+    if f"tva:{period}" not in done and not declared and first[:7] <= period:
+        due_day = int(s.get("ca3_due_day") or 19)
+        due = date(today.year, today.month, min(due_day, 28))
+        r = compute_period(conn, period)
+        out.append({"id": f"tva:{period}", "kind": "tva", "period": period, "due": due.isoformat(),
+                    "days": (due - today).days, "amount": r["l28"], "credit": r["l27"]})
+    if s.get("urssaf_period") == "trimestre":
+        q = previous_quarter(today)
+        start, end = quarter_bounds(q)
+        due = date.fromisoformat(end) + timedelta(days=30)
+        if f"urssaf:{q}" not in done and first < end and today.isoformat() < (due + timedelta(days=45)).isoformat():
+            u = compute_urssaf(conn, start, end, s)
+            out.append({"id": f"urssaf:{q}", "kind": "urssaf", "period": q, "due": due.isoformat(),
+                        "days": (due - today).days, "amount": u["total"], "ca": sum(u["ca"][k] for k in ("vente", "bic", "bnc"))})
+    else:
+        if f"urssaf:{period}" not in done and first[:7] <= period:
+            y, m = int(period[:4]), int(period[5:7])
+            start = f"{period}-01"
+            end = f"{y + (m == 12):04d}-{m % 12 + 1:02d}-01"
+            due = _end_of_month(date.fromisoformat(end))
+            u = compute_urssaf(conn, start, end, s)
+            out.append({"id": f"urssaf:{period}", "kind": "urssaf", "period": period, "due": due.isoformat(),
+                        "days": (due - today).days, "amount": u["total"],
+                        "ca": sum(u["ca"][k] for k in ("vente", "bic", "bnc"))})
+    return out
+
+
+def mark_task(conn, task_id, done=True):
+    if done:
+        conn.execute("INSERT OR IGNORE INTO tasks_done(task) VALUES (?)", (task_id,))
+        if task_id.startswith("tva:"):
+            from calc import compute_period
+            period = task_id[4:]
+            r = compute_period(conn, period)
+            conn.execute("INSERT INTO declarations(period, declared_at, tva_nette, credit_reporte) VALUES (?, "
+                         "CURRENT_TIMESTAMP, ?, ?) ON CONFLICT(period) DO UPDATE SET declared_at=CURRENT_TIMESTAMP",
+                         (period, r["l28"], r["l27"]))
+    else:
+        conn.execute("DELETE FROM tasks_done WHERE task = ?", (task_id,))
+        if task_id.startswith("tva:"):
+            conn.execute("DELETE FROM declarations WHERE period = ?", (task_id[4:],))
 
 
 def refresh_status(conn, doc_id):
@@ -255,6 +486,8 @@ def refresh_status(conn, doc_id):
     paid = paid_amount(conn, doc_id)
     if doc["kind"] == "avoir":
         status = "rembourse" if paid >= money(doc["total_ttc"]) and paid > 0 else "emise"
+    elif doc.get("cancelled_by_id"):
+        status = "annulee"
     else:
         due = money(doc["total_ttc"]) - credited_amount(conn, doc_id)
         if paid >= due and due >= 0:

@@ -1,31 +1,76 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>{{ 'Devis' if kind == 'devis' else ('Avoirs' if kind == 'avoir' else 'Factures') }}
+{% set is_devis = kind == 'devis' %}
+<div class="head">
+  <h1>{{ 'Devis' if is_devis else ('Avoirs' if f.statut == 'avoirs' else ('Brouillons' if f.statut == 'brouillons' else 'Factures')) }}</h1>
   <span class="spacer"></span>
-  {% if kind != 'avoir' %}<a class="btn primary" href="{{ url_for('doc_new', kind=kind) }}">+ {{ 'Devis' if kind == 'devis' else 'Facture' }}</a>{% endif %}
-</h1>
-<div class="tabs">
-  {% if kind != 'devis' %}
-  <a href="{{ url_for('documents', kind='facture') }}" class="{{ 'on' if kind == 'facture' }}">Factures</a>
-  <a href="{{ url_for('documents', kind='avoir') }}" class="{{ 'on' if kind == 'avoir' }}">Avoirs</a>
-  <span style="width:12px"></span>
-  {% endif %}
-  <a href="{{ url_for('documents', kind=kind) }}" class="{{ 'on' if not year }}">Toutes</a>
-  {% for y in years %}<a href="{{ url_for('documents', kind=kind, annee=y) }}" class="{{ 'on' if year == y }}">{{ y }}</a>{% endfor %}
+  <a class="btn" href="{{ url_for('documents_csv', **request.args) }}">Exporter (CSV)</a>
+  <a class="btn primary" href="{{ url_for('doc_new', kind='devis' if is_devis else 'facture') }}">＋ {{ 'Devis' if is_devis else 'Facture' }}</a>
 </div>
-<div class="card">
+
+<form class="card" method="get">
+  <input type="hidden" name="kind" value="{{ kind }}">
+  <div class="filters">
+    <div class="grow search"><input name="q" value="{{ f.q }}" placeholder="Client, objet ou numéro…"></div>
+    <div><label>Affichage</label><select name="statut" onchange="this.form.submit()">
+      {% if is_devis %}
+        {% for v, l in [('', 'Tous'), ('en_attente', 'En attente'), ('accepte', 'Acceptés'), ('refuse', 'Refusés'), ('facture', 'Facturés')] %}
+        <option value="{{ v }}" {{ 'selected' if f.statut == v }}>{{ l }}</option>{% endfor %}
+      {% else %}
+        {% for v, l in [('', 'Tout'), ('non_payees', 'Non payées'), ('echues', 'Échues / à relancer'), ('payees', 'Payées'), ('brouillons', 'Brouillons'), ('avoirs', 'Avoirs'), ('annulees', 'Annulées')] %}
+        <option value="{{ v }}" {{ 'selected' if f.statut == v }}>{{ l }}</option>{% endfor %}
+      {% endif %}
+    </select></div>
+    {% if not is_devis %}
+    <div><label>Type</label><select name="type" onchange="this.form.submit()">
+      <option value="facture_le" {{ 'selected' if f.type == 'facture_le' }}>Facturé en</option>
+      <option value="encaisse_le" {{ 'selected' if f.type == 'encaisse_le' }}>Encaissé en</option>
+    </select></div>
+    {% endif %}
+    <div><label>Période</label><select name="periode" id="periode" onchange="this.form.submit()">
+      {% for v, l in PERIODS %}<option value="{{ v }}" {{ 'selected' if f.periode == v }}>{{ l }}</option>{% endfor %}
+    </select></div>
+    {% if f.periode == 'perso' %}
+    <div><label>Du</label><input type="date" name="du" value="{{ f.du }}"></div>
+    <div><label>Au</label><input type="date" name="au" value="{{ f.au }}"></div>
+    {% endif %}
+    <div><button class="primary" style="width:100%; justify-content:center">Rechercher</button></div>
+  </div>
+</form>
+
+<div class="card tight">
+  <div class="summary">
+    <div>{{ 'Devis' if is_devis else 'Documents' }}<b>{{ tot.n }}</b></div>
+    <div>Total HT<b>{{ tot.ht|money }}</b></div>
+    <div>Total TTC<b>{{ tot.ttc|money }}</b></div>
+    {% if not is_devis %}<div>Reste à encaisser<b style="color:var(--amber)">{{ tot.rest|money }}</b></div>{% endif %}
+    {% if tot.enc %}<div>Encaissé sur la période<b style="color:var(--accent)">{{ tot.enc|money }}</b></div>{% endif %}
+  </div>
   {% if docs %}
-  <table>
-    <tr><th>N°</th><th>Client</th><th class="hide-m">Date</th><th class="n">Total TTC</th><th class="n hide-m">Plateforme</th><th class="n">Statut</th></tr>
-    {% for d in docs %}
-    <tr class="click" onclick="location='{{ url_for('doc_view', doc_id=d.id) }}'">
-      <td>{{ d.number or '(brouillon)' }}</td><td>{{ d.client_name }}</td><td class="hide-m">{{ d.issue_date|date }}</td>
-      <td class="n">{{ d.total_ttc|money }}</td>
-      <td class="n hide-m small muted">{% if d.pdp_error and not d.pdp_id %}<span class="pill red">erreur</span>{% elif d.pdp_status_text %}{{ d.pdp_status_text }}{% endif %}</td>
-      <td class="n"><span class="pill {{ STATUS[d.status][1] }}">{{ STATUS[d.status][0] }}</span></td>
+  <table class="list">
+    <tr><th>N°</th><th class="hide-m">Date</th><th>Client · objet</th><th class="n hide-m">HT</th><th class="n">TTC</th>
+      <th class="hide-m">{{ 'Validité' if is_devis else 'Échéance' }}</th><th class="n">{{ 'Statut' if is_devis else 'Payé' }}</th></tr>
+    {% for x in docs %}
+    <tr class="click {{ 'draft' if x.status == 'brouillon' }} {{ 'late' if x.late }} {{ 'dim' if x.status == 'annulee' }}"
+        data-href="{{ url_for('doc_edit', doc_id=x.id) if x.status == 'brouillon' else url_for('doc_view', doc_id=x.id) }}">
+      <td class="t">{% if x.status == 'brouillon' %}<span class="pill green">Brouillon</span>{% else %}{{ x.number }}{% endif %}
+        {% if x.kind == 'avoir' %}<div class="st">Avoir</div>{% endif %}</td>
+      <td class="hide-m">{{ x.issue_date|date }}</td>
+      <td><div class="t">{{ x.client_name }}</div>{% if x.subject %}<div class="st">{{ x.subject }}</div>{% endif %}
+        {% if x.pdp_error and not x.pdp_id and x.status != 'brouillon' %}<span class="pill red">non transmise</span>{% endif %}</td>
+      <td class="n hide-m {{ 'neg' if x.sign < 0 }}">{{ (x.sign * x.total_ht)|money }}</td>
+      <td class="n t {{ 'neg' if x.sign < 0 }}">{{ (x.sign * x.total_ttc)|money }}</td>
+      <td class="hide-m">{{ (x.validity_date if is_devis else x.due_date)|date }}</td>
+      <td class="n">
+        {% if is_devis or x.status in ('brouillon', 'annulee') %}<span class="pill {{ STATUS[x.status][1] }}">{{ STATUS[x.status][0] }}</span>
+        {% elif x.status == 'payee' or x.status == 'rembourse' %}{{ x.paid_on|date }}
+        {% elif x.late %}<span class="pill red">En retard</span>
+        {% elif x.status == 'partielle' %}<span class="pill amber">Partiel</span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
     </tr>
     {% endfor %}
   </table>
-  {% else %}<div class="empty">Rien ici pour l'instant.</div>{% endif %}
+  {% else %}<div class="empty"><div class="big">🗂</div>Aucun document pour ces critères.</div>{% endif %}
 </div>
 {% endblock %}

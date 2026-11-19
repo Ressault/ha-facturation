@@ -219,8 +219,9 @@ def build_en_invoice(doc, lines, seller, client, extra=None):
     if client.get("email"):
         buyer_json["contact"] = {"email_address": client["email"]}
 
+    from calc import items as _items
     en_lines = []
-    for i, ln in enumerate(lines, 1):
+    for i, ln in enumerate(_items(lines), 1):
         rate = d(ln["vat_rate"])
         item = {"name": ln["designation"][:200]}
         if ln.get("description"):
@@ -257,14 +258,16 @@ def build_en_invoice(doc, lines, seller, client, extra=None):
     if paid:
         totals_json["paid_amount"] = _money(paid)
 
+    from pdf import penalty_text, discount_text
     notes = [
-        {"note": seller.get("late_penalty") or "Pénalités de retard : 3 fois le taux d'intérêt légal",
-         "subject_code": "PMD"},
+        {"note": penalty_text(doc, seller), "subject_code": "PMD"},
         {"note": seller.get("recovery_fee") or "Indemnité forfaitaire pour frais de recouvrement : 40 €",
          "subject_code": "PMT"},
-        {"note": seller.get("discount_terms") or "Pas d'escompte pour paiement anticipé",
-         "subject_code": "AAB"},
+        {"note": discount_text(doc, seller), "subject_code": "AAB"},
     ]
+    for ln in lines:
+        if (ln.get("kind") if isinstance(ln, dict) else None) == "comment" and ln.get("designation"):
+            notes.append({"note": ln["designation"][:1000]})
     if doc.get("notes"):
         notes.append({"note": doc["notes"][:1000]})
 

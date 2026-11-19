@@ -1,26 +1,53 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Achats <span class="muted small">— TVA déductible</span><span class="spacer"></span>
+<div class="head"><h1>Dépenses</h1><span class="spacer"></span>
   {% if pdp_on %}<form method="post" action="{{ url_for('sync_now') }}"><button>Relever les factures reçues</button></form>{% endif %}
-  <a class="btn primary" href="{{ url_for('purchase_form') }}">+ Achat</a></h1>
-<p class="muted small">Les factures de vos fournisseurs arrivent ici automatiquement via la plateforme agréée. Ajoutez à la main les autres (tickets, achats en ligne…). Marquez-les payées : la TVA est déduite sur le mois indiqué.</p>
-<div class="card">
+  <a class="btn" href="{{ url_for('purchases_csv', **request.args) }}">Exporter (CSV)</a>
+  <a class="btn primary" href="{{ url_for('purchase_form') }}">＋ Dépense</a></div>
+
+<form class="card" method="get">
+  <div class="filters">
+    <div class="grow search"><input name="q" value="{{ f.q }}" placeholder="Fournisseur, libellé ou référence…"></div>
+    <div><label>Affichage</label><select name="statut" onchange="this.form.submit()">
+      {% for v, l in [('', 'Tout'), ('non_payees', 'Non payées'), ('payees', 'Payées'), ('sans_deduction', 'TVA non déduite')] %}
+      <option value="{{ v }}" {{ 'selected' if f.statut == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <div><label>Type</label><select name="type" onchange="this.form.submit()">
+      <option value="facture_le" {{ 'selected' if f.type == 'facture_le' }}>Facturé en</option>
+      <option value="paye_le" {{ 'selected' if f.type == 'paye_le' }}>Payé en</option></select></div>
+    <div><label>Période</label><select name="periode" onchange="this.form.submit()">
+      {% for v, l in PERIODS %}<option value="{{ v }}" {{ 'selected' if f.periode == v }}>{{ l }}</option>{% endfor %}</select></div>
+    {% if f.periode == 'perso' %}
+    <div><label>Du</label><input type="date" name="du" value="{{ f.du }}"></div>
+    <div><label>Au</label><input type="date" name="au" value="{{ f.au }}"></div>
+    {% endif %}
+    <div><button class="primary" style="width:100%; justify-content:center">Rechercher</button></div>
+  </div>
+</form>
+
+<div class="card tight">
+  <div class="summary">
+    <div>Dépenses<b>{{ tot.n }}</b></div><div>Total HT<b>{{ tot.ht|money }}</b></div>
+    <div>TVA<b>{{ tot.tva|money }}</b></div><div>Total TTC<b>{{ tot.ttc|money }}</b></div>
+  </div>
   {% if purchases %}
-  <table>
-    <tr><th>Fournisseur</th><th class="hide-m">Facture</th><th class="n">HT</th><th class="n">TVA</th><th>Déduite en</th><th></th></tr>
+  <table class="list">
+    <tr><th>Date</th><th class="hide-m">Réf.</th><th>Fournisseur · libellé</th><th class="n hide-m">HT</th><th class="n">TTC</th><th class="n">Réglé</th><th class="hide-m">Par</th></tr>
     {% for p in purchases %}
-    <tr>
-      <td><a href="{{ url_for('purchase_form', pid=p.id) }}">{{ p.supplier }}</a>{% if p.source == 'pdp' %} <span class="pill blue">reçue</span>{% endif %}
-        <div class="small muted">{{ p.description or '' }}</div></td>
-      <td class="hide-m small">{{ p.invoice_number or '' }}<br>{{ p.invoice_date|date }}{% if p.file_path %} · <a href="{{ url_for('purchase_file', pid=p.id) }}" target="_blank">PDF</a>{% endif %}</td>
-      <td class="n">{{ p.total_ht|money }}</td><td class="n">{{ p.total_tva|money }}</td>
-      <td>{% if p.deduction_date %}{{ period_label(p.deduction_date[:7]) }}{% else %}
-        <form method="post" action="{{ url_for('purchase_paid', pid=p.id) }}" class="actions" style="flex-wrap:nowrap">
-          <input type="date" name="date" value="{{ today }}" style="width:140px"><button class="small primary">Payée</button></form>{% endif %}</td>
-      <td>{% if p.source == 'manuel' %}<form method="post" action="{{ url_for('purchase_delete', pid=p.id) }}" data-confirm="Supprimer cet achat ?"><button class="small danger">×</button></form>{% endif %}</td>
+    <tr class="click {{ 'late' if not p.paid_date and p.due_date and p.due_date < today }}" data-href="{{ url_for('purchase_form', pid=p.id) }}">
+      <td>{{ p.invoice_date|date }}</td>
+      <td class="hide-m small muted">{{ p.invoice_number or '' }}</td>
+      <td><div class="t">{{ p.supplier_name or p.supplier }}
+          {% if p.source == 'pdp' %}<span class="pill blue">reçue</span>{% elif p.source == 'recurrent' %}<span class="pill">récurrent</span>{% endif %}
+          {% if p.category == 'immobilisation' %}<span class="pill amber">immo.</span>{% endif %}</div>
+        {% if p.description %}<div class="st">{{ p.description }}</div>{% endif %}</td>
+      <td class="n hide-m">{{ p.total_ht|money }}</td><td class="n t">{{ p.total_ttc|money }}</td>
+      <td class="n">{% if p.paid_date %}{{ p.paid_date|date }}{% else %}
+        <form method="post" action="{{ url_for('purchase_paid', pid=p.id) }}" class="row" style="flex-wrap:nowrap; justify-content:flex-end">
+          <input type="date" name="date" value="{{ today }}" style="width:140px; padding:5px 8px"><button class="small primary">Payée</button></form>{% endif %}</td>
+      <td class="hide-m small muted">{{ p.method or '' }}</td>
     </tr>
     {% endfor %}
   </table>
-  {% else %}<div class="empty">Aucun achat enregistré.</div>{% endif %}
+  {% else %}<div class="empty"><div class="big">🧾</div>Aucune dépense sur cette période.</div>{% endif %}
 </div>
 {% endblock %}

@@ -1,71 +1,104 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>{% if doc.id %}{{ KIND_LABEL[doc.kind] }} {{ doc.number or '(brouillon)' }}{% else %}{{ 'Nouveau devis' if doc.kind == 'devis' else 'Nouvelle facture' }}{% endif %}
-  {% if preview %}<span class="muted small">— sera n° {{ preview }}{% if doc.kind != 'devis' %} à l'émission{% endif %}</span>{% endif %}</h1>
+{% set is_devis = doc.kind == 'devis' %}
 <form method="post" action="{{ url_for('doc_save') }}" id="docform">
+<div class="head">
+  <div>
+    <h1>{% if doc.id %}{{ KIND_LABEL[doc.kind] }} {{ doc.number or '' }}{% else %}{{ 'Nouveau devis' if is_devis else 'Nouvelle facture' }}{% endif %}
+      {% if doc.status == 'brouillon' %}<span class="pill green" style="vertical-align:middle">Brouillon</span>{% endif %}</h1>
+    {% if preview %}<div class="sub">Numéro attribué {{ 'à la finalisation' if not is_devis else '' }} : {{ preview }}</div>{% endif %}
+  </div>
+  <span class="spacer"></span>
+  <a class="btn" href="{{ url_for('doc_view', doc_id=doc.id) if doc.id else url_for('documents', kind=doc.kind) }}">Annuler</a>
+</div>
+
   <input type="hidden" name="id" value="{{ doc.id or '' }}">
   <input type="hidden" name="kind" value="{{ doc.kind }}">
   <input type="hidden" name="avoir_of_id" value="{{ doc.avoir_of_id or '' }}">
   <input type="hidden" name="source_devis_id" value="{{ doc.source_devis_id or '' }}">
-  <div class="card">
-    <div class="form-grid">
-      <div class="wide"><label>Client *</label>
-        <div class="actions" style="flex-wrap:nowrap">
-        <select name="client_id" required>
-          <option value="">— choisir —</option>
-          {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if doc.client_id == c.id }}>{{ c.name }}{% if c.kind == 'particulier' %} (particulier){% endif %}</option>{% endfor %}
-        </select>
-        <a class="btn small" href="{{ url_for('client_form', next=doc.kind if doc.kind != 'avoir' else 'facture') }}">+ Nouveau</a></div></div>
-      <div><label>Date</label><input type="date" name="issue_date" value="{{ doc.issue_date or '' }}"></div>
-      {% if doc.kind == 'devis' %}
-      <div><label>Valable jusqu'au</label><input type="date" name="validity_date" value="{{ doc.validity_date or '' }}"></div>
-      {% elif doc.kind == 'facture' %}
-      <div><label>Échéance</label><input type="date" name="due_date" value="{{ doc.due_date or '' }}" placeholder="auto"></div>
+
+  <div class="grid g21">
+    <div class="card" style="margin:0">
+      <div class="fields">
+        <div class="wide"><label>Client</label>
+          <div class="row" style="flex-wrap:nowrap">
+            <select name="client_id" required>
+              <option value="">Choisir un client…</option>
+              {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if doc.client_id == c.id }}>{{ c.name }}{% if c.kind == 'particulier' %} (particulier){% endif %}</option>{% endfor %}
+            </select>
+            <a class="btn" href="{{ url_for('client_form', next=doc.kind if doc.kind != 'avoir' else 'facture') }}">＋</a>
+          </div></div>
+        <div class="wide"><label>Objet</label><input name="subject" value="{{ doc.subject or '' }}" placeholder="ex. Rendus 3D — Les Chalets des Claux, Vars"></div>
+        <div><label>Date</label><input type="date" name="issue_date" id="issue_date" value="{{ doc.issue_date or '' }}"></div>
+        <div><label>Réalisé le / période</label><input name="service_date" value="{{ doc.service_date or '' }}" placeholder="ex. novembre 2026"></div>
+      </div>
+    </div>
+    <div class="card" style="margin:0">
+      {% if is_devis %}
+        <label>Valable jusqu'au</label><input type="date" name="validity_date" value="{{ doc.validity_date or '' }}">
       {% endif %}
-      <div><label>Date ou période de prestation</label><input name="service_date" value="{{ doc.service_date or '' }}" placeholder="ex. novembre 2026"></div>
-      <div class="wide"><label>Objet</label><input name="subject" value="{{ doc.subject or '' }}" placeholder="ex. Modélisation 3D — projet Dupont"></div>
+      {% if doc.kind != 'avoir' %}
+      <div class="fields" style="grid-template-columns:1fr; margin-top:{{ '12px' if is_devis else '0' }}">
+        <div><label>Conditions de règlement</label>
+          <select name="payment_terms" id="payment_terms">
+            {% for v, l in PAYMENT_TERMS %}<option value="{{ v }}" {{ 'selected' if (doc.payment_terms or settings.default_payment_terms) == v }}>{{ l }}</option>{% endfor %}
+          </select></div>
+        {% if not is_devis %}
+        <div><label>Échéance</label><input type="date" name="due_date" id="due_date" value="{{ doc.due_date or '' }}">
+          <div class="help" id="due_help">Calculée d'après les conditions de règlement.</div></div>
+        {% endif %}
+      </div>
+      <div class="fields" style="grid-template-columns:1fr 1fr; margin:0">
+        <div><label>Pénalités de retard</label><div class="row" style="flex-wrap:nowrap"><input name="penalty_rate" inputmode="decimal" value="{{ doc.penalty_rate|qty if doc.penalty_rate not in (None, '') else '' }}" placeholder="taux légal ×3"><span class="muted">%</span></div></div>
+        <div><label>Escompte</label><div class="row" style="flex-wrap:nowrap"><input name="discount_rate" inputmode="decimal" value="{{ doc.discount_rate|qty if doc.discount_rate not in (None, '') else '' }}" placeholder="aucun"><span class="muted">%</span></div></div>
+      </div>
+      {% endif %}
     </div>
   </div>
 
   <div class="card">
-    <h2>Lignes</h2>
+    <div class="row between"><h2 style="margin:0">Lignes</h2>
+      <span class="small muted">Flèches ↑ ↓ pour réordonner les lignes</span></div>
     <datalist id="catalog">{% for c in catalog %}<option value="{{ c.designation }}">{% endfor %}</datalist>
     <table class="lines" id="lines">
-      <tr><th>Désignation</th><th style="width:80px">Qté</th><th style="width:80px">Unité</th><th style="width:110px">PU HT</th><th style="width:80px">TVA %</th><th class="n" style="width:110px">Total HT</th><th style="width:30px"></th></tr>
-      {% for ln in lines %}
-      <tr class="line">
-        <td><input name="designation" list="catalog" value="{{ ln.designation }}" placeholder="Prestation">
-            <textarea name="description" class="desc" placeholder="Détail (facultatif)">{{ ln.description or '' }}</textarea></td>
-        <td><input name="quantity" inputmode="decimal" value="{{ ln.quantity|string|replace('.0', '') if ln.quantity is number else ln.quantity }}"></td>
-        <td><select name="unit">{% for u in ['u', 'h', 'jour', 'forfait', 'mois', 'km', 'm2'] %}<option {{ 'selected' if (ln.unit or 'u') == u }}>{{ u }}</option>{% endfor %}</select></td>
-        <td><input name="unit_price" inputmode="decimal" value="{{ ln.unit_price }}"></td>
-        <td><select name="vat_rate">{% for r in [20, 10, 5.5, 2.1, 0] %}<option value="{{ r }}" {{ 'selected' if ln.vat_rate|float == r }}>{{ r|string|replace('.', ',') }}</option>{% endfor %}</select></td>
-        <td class="n lt">0,00 €</td>
-        <td><button type="button" class="small danger del" title="Supprimer">×</button></td>
-      </tr>
-      {% endfor %}
+      <thead><tr><th>Désignation</th><th style="width:72px">Qté</th><th style="width:88px">Unité</th><th style="width:110px">PU HT</th>
+        <th style="width:84px">TVA</th><th style="width:130px" class="hide-m">Nature</th><th class="n" style="width:110px">Total HT</th><th style="width:84px"></th></tr></thead>
+      <tbody>
+      {% for ln in lines %}{% include "_line.html" %}{% endfor %}
+      </tbody>
     </table>
-    <button type="button" id="add" class="small">+ Ligne</button>
+    <template id="tpl-item">{% with ln = {'kind': 'item', 'designation': '', 'quantity': 1, 'unit': 'u', 'unit_price': '', 'vat_rate': settings.default_vat_rate|float, 'nature': settings.default_nature} %}{% include "_line.html" %}{% endwith %}</template>
+    <template id="tpl-title">{% with ln = {'kind': 'title', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
+    <template id="tpl-subtotal">{% with ln = {'kind': 'subtotal', 'designation': 'Sous-total'} %}{% include "_line.html" %}{% endwith %}</template>
+    <template id="tpl-comment">{% with ln = {'kind': 'comment', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
+    <template id="tpl-page">{% with ln = {'kind': 'page', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
+    <div class="addbar">
+      <button type="button" data-add="item">＋ Ligne</button>
+      <button type="button" class="alt" data-add="title">＋ Titre</button>
+      <button type="button" class="alt" data-add="subtotal">＋ Sous-total</button>
+      <button type="button" class="alt" data-add="comment">＋ Commentaire</button>
+      <button type="button" class="alt" data-add="page">＋ Saut de page</button>
+    </div>
     <table class="totals">
-      <tr><td>Total HT</td><td class="n" id="tht">0,00 €</td></tr>
-      <tr><td>TVA</td><td class="n" id="ttva">0,00 €</td></tr>
-      <tr class="big"><td>Total TTC</td><td class="n" id="tttc">0,00 €</td></tr>
+      <tr><td class="muted">Total HT</td><td id="tht">0,00 €</td></tr>
+      <tbody id="tvat"></tbody>
+      <tr class="big"><td>Total TTC</td><td id="tttc">0,00 €</td></tr>
     </table>
   </div>
 
   <div class="card">
-    <label>Note sur le document (facultatif)</label>
+    <label>Note en bas du document (facultatif)</label>
     <textarea name="notes" placeholder="ex. Acompte de 30 % à la commande">{{ doc.notes or '' }}</textarea>
   </div>
 
-  <div class="actions">
-    {% if doc.kind == 'devis' %}
+  <div class="sticky-actions">
+    {% if is_devis %}
       <button class="primary" name="action" value="enregistrer">Enregistrer le devis</button>
     {% else %}
-      <button name="action" value="enregistrer">Enregistrer le brouillon</button>
-      <button class="primary" name="action" value="valider" onclick="return confirm('Émettre définitivement ? Le numéro sera attribué et la facture ne pourra plus être modifiée{{ ' ; elle sera transmise au client via la plateforme agréée' if pdp_on and settings.pdp_auto_send == '1' }}.')">Émettre {{ "l'avoir" if doc.kind == 'avoir' else 'la facture' }}</button>
+      <button name="action" value="enregistrer">Enregistrer en brouillon</button>
+      {% set what = "l'avoir" if doc.kind == 'avoir' else 'la facture' %}
+      <button class="green" name="action" value="valider" data-msg="Finaliser {{ what }} ? Le numéro sera attribué définitivement et le document ne pourra plus être modifié{{ ' ; il sera transmis au client via la plateforme agréée' if pdp_on and settings.pdp_auto_send == '1' }}." onclick="return confirm(this.dataset.msg)">Finaliser {{ what }}</button>
     {% endif %}
-    <a class="btn" href="{{ url_for('doc_view', doc_id=doc.id) if doc.id else url_for('documents', kind=doc.kind) }}">Annuler</a>
   </div>
 </form>
 {% endblock %}
@@ -75,43 +108,66 @@ const catalog = {{ catalog|map('list')|list|tojson }};
 const fmt = v => v.toLocaleString('fr-FR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' €';
 const num = v => parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) || 0;
 const r2 = v => Math.round((v + Number.EPSILON) * 100) / 100;
+const body = document.querySelector('#lines tbody');
 function recalc() {
-  let ht = 0; const vat = {};
-  document.querySelectorAll('#lines tr.line').forEach(tr => {
-    const q = num(tr.querySelector('[name=quantity]').value), p = num(tr.querySelector('[name=unit_price]').value);
-    const rate = num(tr.querySelector('[name=vat_rate]').value), t = r2(q * p);
-    tr.querySelector('.lt').textContent = fmt(t); ht += t; vat[rate] = (vat[rate] || 0) + t;
+  let ht = 0, running = 0; const vat = {};
+  body.querySelectorAll('tr').forEach(tr => {
+    const k = tr.dataset.kind;
+    if (k === 'item') {
+      const q = num(tr.querySelector('[name=quantity]').value), p = num(tr.querySelector('[name=unit_price]').value);
+      const rate = num(tr.querySelector('[name=vat_rate]').value), t = r2(q * p);
+      tr.querySelector('.lt').textContent = fmt(t); ht += t; running += t; vat[rate] = (vat[rate] || 0) + t;
+    } else if (k === 'subtotal') {
+      tr.querySelector('.lt').textContent = fmt(running); running = 0;
+    }
   });
-  let tva = 0; for (const [r, b] of Object.entries(vat)) tva += r2(r2(b) * r / 100);
+  let tva = 0, rows = '';
+  Object.keys(vat).sort((a, b) => b - a).forEach(r => {
+    const t = r2(r2(vat[r]) * r / 100); tva += t;
+    rows += `<tr><td class="muted">TVA ${String(r).replace('.', ',')} %</td><td>${fmt(t)}</td></tr>`;
+  });
+  document.getElementById('tvat').innerHTML = rows;
   document.getElementById('tht').textContent = fmt(ht);
-  document.getElementById('ttva').textContent = fmt(tva);
   document.getElementById('tttc').textContent = fmt(ht + tva);
 }
 function bind(tr) {
-  tr.querySelectorAll('input,select').forEach(i => i.addEventListener('input', recalc));
+  tr.querySelectorAll('input,select,textarea').forEach(i => i.addEventListener('input', recalc));
   tr.querySelector('.del').addEventListener('click', () => {
-    if (document.querySelectorAll('#lines tr.line').length > 1) { tr.remove(); recalc(); }
+    if (tr.dataset.kind === 'item' && body.querySelectorAll('tr[data-kind=item]').length <= 1) return;
+    tr.remove(); recalc();
   });
-  const des = tr.querySelector('[name=designation]');
-  des.addEventListener('change', () => {
+  tr.querySelector('.up').addEventListener('click', () => { if (tr.previousElementSibling) { body.insertBefore(tr, tr.previousElementSibling); recalc(); } });
+  tr.querySelector('.down').addEventListener('click', () => { if (tr.nextElementSibling) { body.insertBefore(tr.nextElementSibling, tr); recalc(); } });
+  const des = tr.querySelector('input[name=designation][list]');
+  if (des) des.addEventListener('change', () => {
     const hit = catalog.find(c => c[0] === des.value);
-    if (hit) {
-      const price = tr.querySelector('[name=unit_price]');
-      if (!price.value) price.value = String(hit[2]).replace('.', ',');
-      tr.querySelector('[name=unit]').value = hit[1] || 'u';
-      tr.querySelector('[name=vat_rate]').value = String(hit[3]);
-      recalc();
-    }
+    if (!hit) return;
+    const price = tr.querySelector('[name=unit_price]');
+    if (!price.value) price.value = String(hit[2]).replace('.', ',');
+    tr.querySelector('[name=unit]').value = hit[1] || 'u';
+    tr.querySelector('[name=vat_rate]').value = String(hit[3]).replace(/\.0$/, '');
+    if (hit[4]) tr.querySelector('[name=nature]').value = hit[4];
+    recalc();
   });
 }
-document.querySelectorAll('#lines tr.line').forEach(bind);
-document.getElementById('add').addEventListener('click', () => {
-  const rows = document.querySelectorAll('#lines tr.line');
-  const tr = rows[rows.length - 1].cloneNode(true);
-  tr.querySelectorAll('input,textarea').forEach(i => i.value = i.name === 'quantity' ? '1' : '');
-  document.getElementById('lines').appendChild(tr); bind(tr); recalc();
-  tr.querySelector('[name=designation]').focus();
-});
+body.querySelectorAll('tr').forEach(bind);
+document.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => {
+  const tpl = document.getElementById('tpl-' + b.dataset.add).content.firstElementChild.cloneNode(true);
+  body.appendChild(tpl); bind(tpl); recalc();
+  const first = tpl.querySelector('input:not([type=hidden]),textarea'); if (first) first.focus();
+}));
 recalc();
+// échéance automatique
+const terms = document.getElementById('payment_terms'), due = document.getElementById('due_date'), issue = document.getElementById('issue_date');
+function computeDue() {
+  if (!due || !terms) return;
+  const code = terms.value.replace('-inv', ''), m = code.match(/^(\d+)(fm)?(\d+)?$/);
+  if (!m || !issue.value) return;
+  const d = new Date(issue.value + 'T12:00:00'); d.setDate(d.getDate() + parseInt(m[1]));
+  if (m[2]) { d.setMonth(d.getMonth() + 1, 0); if (m[3]) { d.setMonth(d.getMonth() + 1, Math.min(parseInt(m[3]), 28)); } }
+  due.value = d.toISOString().slice(0, 10);
+}
+if (terms) terms.addEventListener('change', computeDue);
+if (issue) issue.addEventListener('change', computeDue);
 </script>
 {% endblock %}

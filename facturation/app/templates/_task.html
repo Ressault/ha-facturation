@@ -1,0 +1,17 @@
+<div class="task {{ 'late' if t.days < 0 }}">
+  <form method="post" action="{{ url_for('task_toggle', task_id=t.id) }}" class="task-check">
+    <button class="check" title="Marquer comme fait" aria-label="Marquer comme fait"></button>
+  </form>
+  <div class="ic {{ t.kind }}">{{ '🧾' if t.kind == 'tva' else '🏛' }}</div>
+  <div class="txt">
+    {% if t.kind == 'tva' %}
+      <strong>Déclarer la TVA de {{ period_label(t.period) }}</strong>
+      <div class="sub">{% if t.days < 0 %}Date limite dépassée ({{ t.due|date }}){% elif t.days == 0 %}Aujourd'hui, dernier jour{% else %}Avant le {{ t.due|date }} · {{ t.days }} jour{{ 's' if t.days > 1 }}{% endif %}
+        · {% if t.amount %}{{ t.amount|int_fr }} € à payer{% elif t.credit %}crédit de {{ t.credit|int_fr }} €{% else %}déclaration néant ou à 0 €{% endif %}</div>
+    {% else %}
+      <strong>Déclarer le chiffre d'affaires URSSAF — {{ period_label(t.period) if '-T' not in t.period else t.period[-2:] ~ ' ' ~ t.period[:4] }}</strong>
+      <div class="sub">{% if t.days < 0 %}Échéance dépassée ({{ t.due|date }}){% else %}Avant le {{ t.due|date }}{% endif %} · {{ t.ca|int_fr }} € de recettes · environ {{ t.amount|int_fr }} € de cotisations</div>
+    {% endif %}
+  </div>
+  <a class="btn small" href="{{ url_for('tva', mois=t.period) if t.kind == 'tva' else url_for('urssaf', p=t.period) }}">Voir les montants</a>
+</div>

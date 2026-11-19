@@ -1,72 +1,87 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>{{ client.name if client else 'Nouveau client' }}
-  {% if client %}<span class="spacer"></span>
-  <a class="btn" href="{{ url_for('doc_new', kind='devis', client_id=client.id) }}">+ Devis</a>
-  <a class="btn primary" href="{{ url_for('doc_new', kind='facture', client_id=client.id) }}">+ Facture</a>{% endif %}
-</h1>
-<form method="post" class="card">
-  <div class="form-grid">
-    <div><label>Type</label>
-      <select name="kind" id="kind">
-        <option value="pro" {{ 'selected' if not client or client.kind == 'pro' }}>Professionnel</option>
-        <option value="particulier" {{ 'selected' if client and client.kind == 'particulier' }}>Particulier</option>
-      </select></div>
+<div class="head">
+  <div><h1>{{ client.name if client else 'Nouveau client' }}</h1>
+    {% if client %}<div class="sub">{{ docs|length }} document{{ 's' if docs|length > 1 }} · CA {{ ca|money }} HT</div>{% endif %}</div>
+  <span class="spacer"></span>
+  {% if client %}
+  <a class="btn" href="{{ url_for('doc_new', kind='devis', client_id=client.id) }}">＋ Devis</a>
+  <a class="btn primary" href="{{ url_for('doc_new', kind='facture', client_id=client.id) }}">＋ Facture</a>
+  {% endif %}
+</div>
+<div class="grid g21">
+<form method="post" class="card" style="margin:0">
+  <div class="fields">
+    <div><label>Type</label><div class="seg" id="kindseg">
+      <button type="button" data-v="pro" class="{{ 'on' if not client or client.kind == 'pro' }}">Professionnel</button>
+      <button type="button" data-v="particulier" class="{{ 'on' if client and client.kind == 'particulier' }}">Particulier</button></div>
+      <input type="hidden" name="kind" id="kind" value="{{ client.kind if client else 'pro' }}"></div>
     <div class="pro-only"><label>SIREN ou SIRET</label>
-      <div class="actions" style="flex-wrap:nowrap"><input name="siren" id="siren" value="{{ client.siren if client else '' }}" inputmode="numeric">
+      <div class="row" style="flex-wrap:nowrap"><input name="siren" id="siren" value="{{ client.siren if client else '' }}" inputmode="numeric">
       <button type="button" class="small" id="lookup">Remplir</button></div>
-      <div class="small muted" id="lookup-msg"></div></div>
-    <div class="wide"><label>Nom / raison sociale *</label><input name="name" id="name" required value="{{ client.name if client else '' }}"></div>
+      <div class="help" id="lookup-msg">Remplit nom, adresse et n° de TVA depuis l'annuaire officiel.</div></div>
+    <div class="wide"><label>Nom / raison sociale</label><input name="name" id="name" required value="{{ client.name if client else '' }}"></div>
     <div class="wide"><label>Adresse</label><textarea name="address" id="address">{{ client.address if client else '' }}</textarea></div>
     <div><label>Code postal</label><input name="post_code" id="post_code" value="{{ client.post_code if client else '' }}"></div>
     <div><label>Ville</label><input name="city" id="city" value="{{ client.city if client else '' }}"></div>
-    <div><label>Pays (code)</label><input name="country" value="{{ client.country if client else 'FR' }}" maxlength="2"></div>
+    <div><label>Pays</label><input name="country" value="{{ client.country if client else 'FR' }}" maxlength="2"></div>
     <div class="pro-only"><label>N° TVA intracommunautaire</label><input name="vat_number" id="vat_number" value="{{ client.vat_number if client else '' }}" placeholder="calculé depuis le SIREN"></div>
     <div><label>E-mail</label><input name="email" type="email" value="{{ client.email if client else '' }}"></div>
     <div><label>Téléphone</label><input name="phone" value="{{ client.phone if client else '' }}"></div>
+    <div class="wide"><label>Notes internes</label><textarea name="notes">{{ client.notes if client else '' }}</textarea></div>
   </div>
-  <details class="pro-only"><summary>Adresse de facturation électronique (avancé)</summary>
-    <p class="small muted">Remplie automatiquement depuis l'annuaire officiel. Par défaut, le SIREN du client est utilisé.</p>
-    <div class="form-grid">
+  <details class="pro-only" style="margin-bottom:14px"><summary>Adresse de facturation électronique</summary>
+    <div class="fields" style="margin-top:10px">
       <div><label>Schéma</label><input name="pdp_address_scheme" id="pdp_address_scheme" value="{{ client.pdp_address_scheme if client else '' }}" placeholder="0225"></div>
-      <div><label>Adresse</label><input name="pdp_address_value" id="pdp_address_value" value="{{ client.pdp_address_value if client else '' }}"></div>
+      <div><label>Adresse</label><input name="pdp_address_value" id="pdp_address_value" value="{{ client.pdp_address_value if client else '' }}" placeholder="SIREN par défaut"></div>
     </div>
   </details>
-  <div class="form-grid"><div class="wide"><label>Notes internes</label><textarea name="notes">{{ client.notes if client else '' }}</textarea></div></div>
   <button class="primary">Enregistrer</button>
 </form>
-
-{% if docs %}
-<div class="card"><h2>Documents</h2>
-<table>
-  {% for d in docs %}
-  <tr class="click" onclick="location='{{ url_for('doc_view', doc_id=d.id) }}'">
-    <td>{{ KIND_LABEL[d.kind] }} {{ d.number or '(brouillon)' }}</td><td>{{ d.issue_date|date }}</td>
-    <td class="n">{{ d.total_ttc|money }}</td><td class="n"><span class="pill {{ STATUS[d.status][1] }}">{{ STATUS[d.status][0] }}</span></td>
-  </tr>
-  {% endfor %}
-</table></div>
-{% endif %}
+<div>
+  {% if client and not docs %}
+  <div class="card"><h3>Pas un client ?</h3>
+    <p class="small muted">Ce contact n'a aucun document. S'il s'agit d'un fournisseur, déplacez-le.</p>
+    <div class="actions">
+      <form method="post" action="{{ url_for('clients_to_suppliers') }}"><input type="hidden" name="ids" value="{{ client.id }}"><button>Déplacer vers les fournisseurs</button></form>
+      <form method="post" action="{{ url_for('client_delete', client_id=client.id) }}" data-confirm="Supprimer ce contact ?"><button class="danger">Supprimer</button></form>
+    </div></div>
+  {% endif %}
+  {% if docs %}
+  <div class="card tight"><h2>Documents</h2>
+    <table class="list">
+      {% for x in docs[:40] %}
+      <tr class="click {{ 'draft' if x.status == 'brouillon' }}" data-href="{{ url_for('doc_view', doc_id=x.id) }}">
+        <td><div class="t">{{ KIND_LABEL[x.kind] }} {{ x.number or '' }}</div><div class="st">{{ x.issue_date|date }}</div></td>
+        <td class="n">{{ x.total_ttc|money }}<div><span class="pill {{ STATUS[x.status][1] }}">{{ STATUS[x.status][0] }}</span></div></td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% if docs|length > 40 %}<p class="small muted" style="padding:0 20px">… et {{ docs|length - 40 }} autres.</p>{% endif %}
+  </div>
+  {% endif %}
+</div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
 const kind = document.getElementById('kind');
 const toggle = () => document.querySelectorAll('.pro-only').forEach(e => e.style.display = kind.value === 'pro' ? '' : 'none');
-kind.addEventListener('change', toggle); toggle();
+document.querySelectorAll('#kindseg button').forEach(b => b.addEventListener('click', () => {
+  kind.value = b.dataset.v; document.querySelectorAll('#kindseg button').forEach(x => x.classList.toggle('on', x === b)); toggle();
+}));
+toggle();
 document.getElementById('lookup').addEventListener('click', async () => {
   const siren = document.getElementById('siren').value.replace(/\D/g, '').slice(0, 9);
   const msg = document.getElementById('lookup-msg');
   if (siren.length !== 9) { msg.textContent = 'SIREN à 9 chiffres.'; return; }
   msg.textContent = 'Recherche…';
   try {
-    const r = await fetch('{{ url_for("api_siren", siren="X") }}'.replace('X', siren));
-    const j = await r.json();
-    if (j.error) { msg.textContent = j.error; }
+    const j = await (await fetch('{{ url_for("api_siren", siren="X") }}'.replace('X', siren))).json();
     for (const k of ['name', 'address', 'post_code', 'city', 'vat_number', 'pdp_address_scheme', 'pdp_address_value']) {
-      const el = document.getElementById(k);
-      if (el && j[k] && !el.value) el.value = j[k];
+      const el = document.getElementById(k); if (el && j[k] && !el.value) el.value = j[k];
     }
-    if (!j.error) msg.textContent = j.name ? 'Trouvé dans l\'annuaire.' : 'Introuvable : remplissez à la main.';
+    msg.textContent = j.error ? j.error : (j.name ? 'Trouvé dans l\'annuaire ✓' : 'Introuvable : remplissez à la main.');
   } catch (e) { msg.textContent = 'Recherche impossible.'; }
 });
 </script>

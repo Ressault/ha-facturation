@@ -272,8 +272,22 @@ def test_monae_import(env, monkeypatch):
         {"id": 3, "customer_id": 11, "invoice_ref": "202610-43", "invoiced_on": "2026-10-05", "title": "Avoir",
          "total": "-100.0", "total_with_vat": "-120.0", "paid_on": "2026-10-05", "draft": False,
          "items": [{"position": 1, "title": "Geste", "quantity": "1.0", "unit_price": "-100.0", "vat": "0.200"}]},
-        {"id": 4, "customer_id": 10, "invoice_ref": "BROUILLON", "draft": True, "total": "1", "items": []},
+        {"id": 4, "customer_id": 10, "invoice_ref": None, "draft": True, "invoiced_on": "2026-11-14", "title": "Chalets",
+         "total": "1875.0", "total_with_vat": "2250.0", "pay_before": "45fm-inv",
+         "items": [{"position": 1, "title": "Visite virtuelle", "style": "title", "quantity": "0", "unit_price": "0", "vat": "0"},
+                   {"position": 2, "title": "Rendu nuit\nVue piscine", "quantity": "1.0", "unit_price": "1875.0", "vat": "0.200", "nature": 3},
+                   {"position": 3, "title": "Livré en 4K", "style": "comment", "quantity": "0", "unit_price": "0", "vat": "0"}]},
     ]
+    quotes = [{"id": 50, "customer_id": 10, "quote_ref": 12, "invoiced_on": "2026-10-01", "term_on": "2026-11-01",
+               "total": "300.0", "total_with_vat": "360.0", "quote_status": 0, "draft": False,
+               "items": [{"position": 1, "title": "Devis rendu", "quantity": "1", "unit_price": "300", "vat": "0.200"}]}]
+    suppliers = [{"id": 70, "company_name": "Spotify", "city": "Stockholm"}, {"id": 71, "company_name": "Autodesk"}]
+    purchases = [{"id": 80, "supplier_id": 70, "title": "abonnement spotify", "invoiced_on": "2026-10-23",
+                  "paid_on": "2026-10-23", "payment_mode": 1, "total": "9.27", "total_with_vat": "11.12", "vat_amount": "1.85"},
+                 {"id": 81, "supplier_id": 71, "title": "license 3ds max", "invoiced_on": "2026-07-06", "paid_on": "2026-07-06",
+                  "payment_mode": 3, "total": "285.0", "total_with_vat": "342.0", "vat_amount": "57.0"}]
+    recurring = [{"id": 90, "supplier_id": 70, "title": "abonnement spotify", "total": "9.27", "total_with_vat": "11.12",
+                  "vat_amount": "1.85", "frequency": 30, "next_on": "2026-11-23", "occurrences": 22}]
     customers = [{"id": 10, "company_name": "Agence Dupont", "siret": "73282932000074", "street": "2 av", "zip_code": "75001",
                   "city": "Paris", "country": "FR", "individual": False, "electronic_address": "0225:732829320"},
                  {"id": 11, "company_name": "", "first_name": "Jean", "last_name": "Martin", "individual": True}]
@@ -285,17 +299,31 @@ def test_monae_import(env, monkeypatch):
             return Resp(customers)
         if path.endswith("/invoices.json"):
             return Resp(invoices)
+        if path.endswith("/quotes.json"):
+            return Resp(quotes)
+        if path.endswith("/suppliers.json"):
+            return Resp(suppliers)
+        if path.endswith("/purchases.json"):
+            return Resp(purchases)
+        if path.endswith("/recurring_purchases.json"):
+            return recurring
         if path.endswith(".pdf"):
             return Resp(content=b"%PDF-1.4 original")
         raise AssertionError(path)
 
     monkeypatch.setattr(monae.Api, "get", fake_get)
+    # un contact fournisseur importé par erreur dans les clients
+    conn0 = db.connect()
+    conn0.execute("INSERT INTO clients(kind, name) VALUES ('pro', 'Autodesk')")
+    conn0.commit()
+    conn0.close()
     monae._run(monae.Api("u", "k"), None, True)
     job = monae.get_job()
     assert job["status"] == "done", job
     r = job["report"]
 
-    assert (r["clients"], r["invoices"], r["avoirs"], r["approx"]) == (2, 2, 1, 0)
+    assert (r["clients"], r["invoices"], r["avoirs"], r["approx"]) == (2, 2, 1, 0), r
+    assert (r["drafts"], r["quotes"], r["suppliers"], r["purchases"], r["recurring"], r["moved"]) == (1, 1, 2, 2, 1, 1), r
     assert r["numbering"]["pattern"] == "{AAAA}{MM}-{N}" and r["numbering"]["next"] == 44
     conn = db.connect()
     docs = {d["number"]: d for d in conn.execute("SELECT * FROM documents").fetchall()}
@@ -305,7 +333,114 @@ def test_monae_import(env, monkeypatch):
     assert os.path.exists(docs["202609-41"]["pdf_path"])
     cl = conn.execute("SELECT * FROM clients WHERE name='Agence Dupont'").fetchone()
     assert cl["siren"] == "732829320" and cl["pdp_address_value"] == "732829320"
+    draft = conn.execute("SELECT * FROM documents WHERE status='brouillon'").fetchone()
+    assert draft["payment_terms"] == "45fm-inv" and draft["number"] is None and draft["total_ttc"] == 2250
+    kinds = [(l["kind"], l["nature"]) for l in conn.execute("SELECT kind, nature FROM lines WHERE document_id=? ORDER BY position", (draft["id"],))]
+    assert kinds == [("title", None), ("item", "bnc"), ("comment", None)]
+    item = conn.execute("SELECT * FROM lines WHERE document_id=? AND kind='item'", (draft["id"],)).fetchone()
+    assert item["designation"] == "Rendu nuit" and item["description"] == "Vue piscine"
+    assert conn.execute("SELECT COUNT(*) FROM documents WHERE kind='devis'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM clients WHERE name='Autodesk'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM purchases").fetchone()[0] == 2
+    # relancer l'import : aucun doublon, documents complétés
+    monae._run(monae.Api("u", "k"), None, True)
+    r2 = monae.get_job()["report"]
+    assert r2["invoices"] == 0 and r2["purchases"] == 0 and r2["drafts"] == 0 and r2["refreshed"] >= 4, r2
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 5
     # numérotation continue
     import logic
     assert logic.preview_number(conn, "facture", "2026-11-20") == "202611-44"
+    conn.close()
+
+
+
+def test_v2_features(env):
+    appmod, db, c = env
+    import calc
+    import logic
+    from datetime import date as _d
+    cid = make_client(c)
+    # conditions de règlement
+    assert logic.due_date_for("2026-11-19", "30-inv") == "2026-12-19"
+    assert logic.due_date_for("2026-11-19", "30fm-inv") == "2026-12-31"
+    assert logic.due_date_for("2026-11-19", "00fm10-inv") == "2026-12-10"
+    assert logic.due_date_for("2026-11-19", "30fm10-inv") == "2027-01-10"
+    assert logic.due_date_for("2026-11-19", "07fm-inv") == "2026-11-30"
+    assert logic.due_date_for("2026-11-19", "45fm-inv") == "2027-01-31"
+    # lignes typées
+    from werkzeug.datastructures import MultiDict
+    rows = [("title", "Rendus", "", "", "", "", "", ""),
+            ("item", "Rendu jour", "", "2", "u", "500", "20", "bnc"),
+            ("subtotal", "Sous-total", "", "", "", "", "", ""),
+            ("comment", "Livraison en 4K", "", "", "", "", "", ""),
+            ("page", "—", "", "", "", "", "", ""),
+            ("item", "Frais de déplacement", "", "1", "u", "80", "0", "debours")]
+    form = [("kind", "facture"), ("client_id", cid), ("issue_date", _d.today().isoformat()), ("payment_terms", "30fm-inv"),
+            ("penalty_rate", "10"), ("discount_rate", "2"), ("action", "valider"), ("subject", "Test")]
+    for r in rows:
+        for k, v in zip(["kind_line", "designation", "description", "quantity", "unit", "unit_price", "vat_rate", "nature"], r):
+            form.append((k, v))
+    resp = c.post("/documents/enregistrer", data=MultiDict(form))
+    fid = int(resp.headers["Location"].rstrip("/").split("/")[-1])
+    conn = db.connect()
+    doc = conn.execute("SELECT * FROM documents WHERE id=?", (fid,)).fetchone()
+    assert doc["total_ht"] == 1080 and doc["total_ttc"] == 1280 and doc["penalty_rate"] == 10
+    assert doc["due_date"] == logic.due_date_for(_d.today().isoformat(), "30fm-inv")
+    assert [l["kind"] for l in conn.execute("SELECT kind FROM lines WHERE document_id=? ORDER BY position", (fid,))] == \
+        ["title", "item", "subtotal", "comment", "page", "item"]
+    assert c.get(f"/documents/{fid}").status_code == 200
+    assert c.get(f"/documents/{fid}/pdf").status_code == 200
+    # paiement total : TVA hors débours, URSSAF BNC hors débours
+    c.post(f"/documents/{fid}/paiement", data={"date": "2026-10-10", "amount": "1280"})
+    res = calc.compute_period(conn, "2026-10")
+    assert res["a1_base"] == 1000 and res["l16"] == 200 and float(res["debours"]) == 80.0
+    u = calc.compute_urssaf(conn, "2026-10-01", "2027-01-01", db.get_settings(conn))
+    assert u["ca"]["bnc"] == 1000 and u["ca"]["debours"] == 80
+    # « Supprimer » une facture finalisée => avoir automatique
+    resp = c.post(f"/documents/{fid}/supprimer")
+    doc = conn.execute("SELECT * FROM documents WHERE id=?", (fid,)).fetchone()
+    assert doc["status"] == "annulee" and doc["cancelled_by_id"]
+    av = conn.execute("SELECT * FROM documents WHERE id=?", (doc["cancelled_by_id"],)).fetchone()
+    assert av["kind"] == "avoir" and av["status"] != "brouillon" and av["number"].startswith("AV-") and av["total_ttc"] == 1280
+    # navigation précédent/suivant
+    fid2 = new_doc(c, "facture", cid, [{"designation": "Y", "quantity": "1", "unit_price": "10", "vat_rate": "20"}], action="valider")
+    d2 = conn.execute("SELECT * FROM documents WHERE id=?", (fid2,)).fetchone()
+    prev, nxt = logic.neighbours(conn, dict(d2))
+    assert prev["id"] == fid and nxt is None
+    # brouillon : vraie suppression
+    did = new_doc(c, "facture", cid, [{"designation": "Z", "quantity": "1", "unit_price": "5", "vat_rate": "20"}])
+    c.post(f"/documents/{did}/supprimer")
+    assert conn.execute("SELECT COUNT(*) FROM documents WHERE id=?", (did,)).fetchone()[0] == 0
+    # achats récurrents
+    c.post("/achats-recurrents/nouveau", data={"supplier": "Spotify", "title": "Abonnement", "total_ht": "9,27",
+                                               "total_tva": "1,85", "every_months": "1", "next_date": "2026-09-23",
+                                               "auto_paid": "1", "active": "1"})
+    n = conn.execute("SELECT COUNT(*) FROM purchases WHERE recurring_id IS NOT NULL").fetchone()[0]
+    rec = conn.execute("SELECT * FROM recurring_purchases").fetchone()
+    expected = sum(1 for m in ["2026-09-23", "2026-10-23", "2026-11-23", "2026-12-23", "2027-01-23"] if m <= _d.today().isoformat())
+    assert n == expected and rec["occurrences"] == expected and rec["next_date"] > _d.today().isoformat()
+    # tâches cochables
+    conn.execute("INSERT INTO documents(kind, number, status, client_id, issue_date, imported) VALUES "
+                 "('facture', 'OLD-1', 'payee', ?, '2026-01-05', 1)", (cid,))
+    conn.commit()
+    tasks = logic.tasks(conn, _d(2026, 11, 19))
+    assert any(t["id"] == "tva:2026-10" for t in tasks)
+    c.post("/taches/tva:2026-10")
+    tasks = logic.tasks(conn, _d(2026, 11, 19))
+    assert not any(t["id"] == "tva:2026-10" for t in tasks)
+    assert conn.execute("SELECT declared_at FROM declarations WHERE period='2026-10'").fetchone()[0]
+    # fournisseurs / reclassement
+    oid = make_client(c, name="Free Mobile", siren="")
+    c.post("/clients/vers-fournisseurs", data={"ids": [str(oid), str(cid)]})
+    assert conn.execute("SELECT COUNT(*) FROM clients WHERE id=?", (oid,)).fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM clients WHERE id=?", (cid,)).fetchone()[0] == 1  # facturé : reste client
+    assert conn.execute("SELECT COUNT(*) FROM suppliers WHERE name='Free Mobile'").fetchone()[0] == 1
+    # toutes les pages
+    for url in ["/", "/clients", "/fournisseurs", "/fournisseurs/nouveau", "/achats", "/achats-recurrents",
+                "/achats-recurrents/nouveau", "/tva", "/urssaf", "/export", "/reglages", "/import",
+                "/documents?kind=facture&periode=annee&type=encaisse_le", "/documents?kind=facture&statut=echues",
+                "/documents?kind=devis", "/documents/export.csv?kind=facture", "/achats/export.csv",
+                f"/export/archives-{_d.today().year}.zip", "/documents/nouveau?kind=devis"]:
+        r = c.get(url)
+        assert r.status_code == 200, url
     conn.close()

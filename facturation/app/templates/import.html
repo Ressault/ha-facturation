@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Importer l'historique MonAE</h1>
+<div class="head"><h1>Import MonAE</h1></div>
 
 <div class="card" id="job" {% if not job or not job.status %}style="display:none"{% endif %}>
   <h2>Import depuis MonAE</h2>
@@ -11,8 +11,8 @@
 </div>
 
 <form method="post" action="{{ url_for('import_monae') }}" class="card" id="monae-form">
-  <h2>Tout récupérer en une fois (recommandé)</h2>
-  <p>L'application va chercher directement chez MonAE tous vos clients, toutes vos factures et vos avoirs, avec leurs règlements et leurs <strong>PDF originaux</strong>, qu'elle archive ici.</p>
+  <h2>Tout récupérer en une fois</h2>
+  <p>L'application récupère directement chez MonAE : clients, factures, avoirs, <strong>brouillons</strong>, <strong>devis</strong>, règlements, <strong>fournisseurs</strong>, <strong>dépenses</strong>, achats récurrents, ainsi que les <strong>PDF originaux</strong>. Vous pouvez relancer l'import autant de fois que nécessaire : rien n'est dupliqué, et les documents déjà importés sont complétés (titres, commentaires, nature des lignes, conditions de règlement).</p>
   <ol class="small">
     <li>Sur facturation.pro, cliquez sur votre avatar (en haut à droite) → <strong>Clé API</strong>.</li>
     <li>Recopiez l'<strong>identifiant API</strong> et la <strong>clé API</strong> ci-dessous.</li>
@@ -56,8 +56,8 @@ async function poll() {
   if (j.status === 'done' && j.report) {
     const r = j.report, n = r.numbering || {};
     document.getElementById('job-result').innerHTML =
-      `<p><strong>${r.clients}</strong> client(s), <strong>${r.invoices}</strong> facture(s) et <strong>${r.avoirs}</strong> avoir(s) importés` +
-      (r.skipped ? `, ${r.skipped} déjà présent(s)` : '') + `.</p>` +
+      `<p><strong>${r.clients}</strong> client(s), <strong>${r.invoices}</strong> facture(s), <strong>${r.avoirs}</strong> avoir(s), <strong>${r.drafts || 0}</strong> brouillon(s), <strong>${r.quotes || 0}</strong> devis, <strong>${r.suppliers || 0}</strong> fournisseur(s), <strong>${r.purchases || 0}</strong> dépense(s) et <strong>${r.recurring || 0}</strong> achat(s) récurrent(s) importés` +
+      (r.refreshed ? `, ${r.refreshed} document(s) complété(s)` : '') + (r.moved ? `, ${r.moved} fournisseur(s) retiré(s) des clients` : '') + (r.skipped ? `, ${r.skipped} déjà présent(s)` : '') + `.</p>` +
       (n.last ? `<p>Dernière facture MonAE : <strong>${n.last}</strong>.` + (n.pattern ? ` La numérotation continuera avec le n° <strong>${n.next}</strong> (format ${n.pattern}).` : ' Réglez le prochain numéro dans Réglages.') + `</p>` : '') +
       (r.approx ? `<p class="small">${r.approx} facture(s) avec remise ou lignes complexes : reprises en une ligne par montant total (le PDF original fait foi).</p>` : '') +
       (r.pdf_errors ? `<p class="small" style="color:var(--red)">${r.pdf_errors} PDF non téléchargé(s).</p>` : '') +

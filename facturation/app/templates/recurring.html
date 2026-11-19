@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="head"><h1>Achats récurrents</h1><span class="spacer"></span>
+  <a class="btn primary" href="{{ url_for('recurring_form') }}">＋ Achat récurrent</a></div>
+<p class="muted small" style="margin-top:-8px">Abonnements et frais réguliers : la dépense est créée automatiquement à chaque échéance.</p>
+<div class="card tight">
+  <div class="summary"><div>Actifs<b>{{ rows|selectattr('active')|list|length }}</b></div>
+    <div>Coût mensuel HT<b>{{ tot.ht|money }}</b></div><div>Coût mensuel TTC<b>{{ tot.ttc|money }}</b></div></div>
+  {% if rows %}
+  <table class="list">
+    <tr><th>Fournisseur · libellé</th><th class="n">HT</th><th class="n">TTC</th><th class="n">Prochain</th><th>Fréquence</th><th class="n">Occurrences</th></tr>
+    {% for r in rows %}
+    <tr class="click {{ 'dim' if not r.active }}" data-href="{{ url_for('recurring_form', rid=r.id) }}">
+      <td><div class="t">{{ r.supplier_name or '—' }}</div><div class="st">{{ r.title }}</div></td>
+      <td class="n">{{ r.total_ht|money }}</td><td class="n t">{{ r.total_ttc|money }}</td>
+      <td class="n">{{ r.next_date|date if r.active else 'terminé' }}</td>
+      <td>{{ {1: 'mensuel', 2: 'tous les 2 mois', 3: 'trimestriel', 6: 'semestriel', 12: 'annuel'}.get(r.every_months, 'tous les ' ~ r.every_months ~ ' mois') }}</td>
+      <td class="n">{{ r.occurrences }} / {{ r.max_occurrences or '∞' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty"><div class="big">🔁</div>Aucun achat récurrent.</div>{% endif %}
+</div>
+{% endblock %}

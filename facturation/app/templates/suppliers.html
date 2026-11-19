@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="head"><h1>Fournisseurs</h1><span class="sub">{{ suppliers|length }}</span><span class="spacer"></span>
+  <a class="btn primary" href="{{ url_for('supplier_form') }}">＋ Fournisseur</a></div>
+<form method="get" class="card" style="padding:12px 16px"><div class="search"><input name="q" value="{{ q }}" placeholder="Rechercher un fournisseur…" onchange="this.form.submit()"></div></form>
+<div class="card tight">
+  {% if suppliers %}
+  <table class="list">
+    <tr><th>Fournisseur</th><th class="hide-m">Ville</th><th class="n">Dépenses</th><th class="n">Total HT</th><th class="n hide-m">Dernière</th></tr>
+    {% for s in suppliers %}
+    <tr class="click" data-href="{{ url_for('supplier_form', sid=s.id) }}">
+      <td><div class="t">{{ s.name }}</div>{% if s.email %}<div class="st">{{ s.email }}</div>{% endif %}</td>
+      <td class="hide-m">{{ s.city or '' }}</td><td class="n">{{ s.n }}</td><td class="n t">{{ s.ht|money }}</td>
+      <td class="n hide-m">{{ s.last|date if s.last else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty"><div class="big">🏪</div>Aucun fournisseur. Ils sont créés automatiquement à chaque dépense.</div>{% endif %}
+</div>
+
+{% if orphans %}
+<form method="post" action="{{ url_for('clients_to_suppliers') }}" class="card" id="reclasser">
+  <h2>Contacts à reclasser</h2>
+  <p class="small muted">Ces contacts sont rangés dans les clients mais n'ont aucune facture ni aucun devis. Cochez ceux qui sont en réalité des fournisseurs.</p>
+  <div class="row" style="margin-bottom:8px"><button type="button" class="small" onclick="document.querySelectorAll('#reclasser input[type=checkbox]').forEach(c => c.checked = true)">Tout cocher</button>
+    <button type="button" class="small" onclick="document.querySelectorAll('#reclasser input[type=checkbox]').forEach(c => c.checked = false)">Tout décocher</button></div>
+  <div style="columns: 3 220px; margin-bottom:14px">
+    {% for c in orphans %}<label class="check-row" style="break-inside:avoid"><input type="checkbox" name="ids" value="{{ c.id }}"> {{ c.name }}</label>{% endfor %}
+  </div>
+  <button class="primary">Déplacer dans les fournisseurs</button>
+</form>
+{% endif %}
+{% endblock %}

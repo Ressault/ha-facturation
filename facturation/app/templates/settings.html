@@ -1,83 +1,125 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Réglages <span class="spacer"></span><a class="btn" href="{{ url_for('import_page') }}">Importer l'historique MonAE</a></h1>
-<form method="post">
-<div class="card">
-  <h2>Votre entreprise</h2>
-  <div class="form-grid">
-    <div class="wide"><label>Nom et prénom (la mention « EI » est ajoutée automatiquement)</label><input name="company_name" value="{{ s.company_name }}"></div>
-    <div class="wide"><label>Nom commercial (facultatif)</label><input name="company_trade_name" value="{{ s.company_trade_name }}"></div>
+<div class="head"><h1>Réglages</h1><span class="spacer"></span><a class="btn" href="{{ url_for('import_page') }}">Import MonAE</a></div>
+
+<form method="post" enctype="multipart/form-data" class="card" id="entreprise">
+  <input type="hidden" name="section" value="entreprise">
+  <h2>Mon entreprise</h2>
+  <div class="fields">
+    <div class="wide"><label>Logo (PNG ou JPG, affiché en haut des factures et devis)</label>
+      <div class="row">
+        {% if s.logo_path %}<img class="logo-preview" src="{{ url_for('settings_logo') }}?v={{ range(1000)|random }}" alt="Logo">{% endif %}
+        <input type="file" name="logo" accept="image/png,image/jpeg" style="max-width:320px">
+        {% if s.logo_path %}<label class="check-row"><input type="checkbox" name="remove_logo" value="1"> Retirer le logo</label>{% endif %}
+      </div></div>
+    <div class="wide"><label>Nom et prénom (« EI » ajouté automatiquement)</label><input name="company_name" value="{{ s.company_name }}"></div>
+    <div class="wide"><label>Nom commercial</label><input name="company_trade_name" value="{{ s.company_trade_name }}"></div>
     <div class="wide"><label>Adresse</label><textarea name="address">{{ s.address }}</textarea></div>
     <div><label>Code postal</label><input name="post_code" value="{{ s.post_code }}"></div>
     <div><label>Ville</label><input name="city" value="{{ s.city }}"></div>
     <div><label>SIRET</label><input name="siret" value="{{ s.siret }}" inputmode="numeric"></div>
     <div><label>SIREN</label><input name="siren" value="{{ s.siren }}" placeholder="déduit du SIRET"></div>
-    <div><label>N° TVA intracommunautaire</label><input name="vat_number" value="{{ s.vat_number }}" placeholder="calculé depuis le SIREN"></div>
+    <div><label>N° TVA intracommunautaire</label><input name="vat_number" value="{{ s.vat_number }}"></div>
     <div><label>Code APE</label><input name="ape" value="{{ s.ape }}"></div>
     <div><label>E-mail</label><input name="email" value="{{ s.email }}"></div>
     <div><label>Téléphone</label><input name="phone" value="{{ s.phone }}"></div>
     <div><label>IBAN</label><input name="iban" value="{{ s.iban }}"></div>
     <div><label>BIC</label><input name="bic" value="{{ s.bic }}"></div>
-    <div class="wide"><label>Immatriculation</label><input name="rcs_rm" value="{{ s.rcs_rm }}" placeholder="ex. RCS Tours 123 456 789, ou « Dispensé d'immatriculation au RCS et au RM »"></div>
-    <div class="wide"><label>Assurance professionnelle (si obligatoire pour votre activité)</label><input name="insurance" value="{{ s.insurance }}"></div>
+    <div class="wide"><label>Immatriculation</label><input name="rcs_rm" value="{{ s.rcs_rm }}" placeholder="ex. Dispensé d'immatriculation au RCS et au RM"></div>
+    <div class="wide"><label>Assurance professionnelle (si obligatoire)</label><input name="insurance" value="{{ s.insurance }}"></div>
   </div>
-</div>
-
-<div class="card">
-  <h2>Factures et devis</h2>
-  <div class="form-grid">
-    <div><label>Numérotation des factures</label><input name="invoice_pattern" value="{{ s.invoice_pattern }}"></div>
-    <div><label>Prochain n° de facture en {{ year }}</label><input name="{{ counters.invoice[0] }}" value="{{ counters.invoice[1] }}"></div>
-    <div><label>Numérotation des avoirs</label><input name="avoir_pattern" value="{{ s.avoir_pattern }}"></div>
-    <div><label>Prochain n° d'avoir</label><input name="{{ counters.avoir[0] }}" value="{{ counters.avoir[1] }}"></div>
-    <div><label>Numérotation des devis</label><input name="devis_pattern" value="{{ s.devis_pattern }}"></div>
-    <div><label>Prochain n° de devis</label><input name="{{ counters.devis[0] }}" value="{{ counters.devis[1] }}"></div>
-    <div class="wide small muted">{AAAA} = année, {MM} = mois, {NNNN} = numéro sur 4 chiffres. L'import MonAE règle ces champs tout seul pour continuer votre numérotation.</div>
-    <div class="wide"><label style="display:flex; gap:8px; align-items:center"><input type="checkbox" name="invoice_reset_yearly" value="1" style="width:auto" {{ 'checked' if s.invoice_reset_yearly != '0' }}> Repartir à 1 chaque année (si le format contient l'année)</label></div>
-    <div><label>Délai de paiement (jours)</label><input name="payment_days" value="{{ s.payment_days }}"></div>
-    <div><label>Validité des devis (jours)</label><input name="devis_validity_days" value="{{ s.devis_validity_days }}"></div>
-    <div><label>Taux de TVA par défaut</label><input name="default_vat_rate" value="{{ s.default_vat_rate }}"></div>
-    <div class="wide"><label>Pénalités de retard</label><input name="late_penalty" value="{{ s.late_penalty }}"></div>
-    <div class="wide"><label>Indemnité de recouvrement</label><input name="recovery_fee" value="{{ s.recovery_fee }}"></div>
-    <div class="wide"><label>Escompte</label><input name="discount_terms" value="{{ s.discount_terms }}"></div>
-    <div class="wide"><label>Pied de page (facultatif)</label><input name="footer_note" value="{{ s.footer_note }}"></div>
-  </div>
-</div>
-
-<div class="card">
-  <h2>TVA</h2>
-  <div class="form-grid">
-    <div><label>Jour limite de dépôt de la CA3</label><input name="ca3_due_day" value="{{ s.ca3_due_day }}">
-      <div class="small muted">Indiqué dans votre espace professionnel impots.gouv (entre le 15 et le 24).</div></div>
-  </div>
-</div>
-
-<div class="card">
-  <h2>Plateforme agréée — SUPER PDP</h2>
-  <p class="small muted">Créez votre compte sur superpdp.tech, puis une application (menu Applications) : recopiez ici son identifiant et son secret.</p>
-  <div class="form-grid">
-    <div><label>Client ID</label><input name="pdp_client_id" value="{{ s.pdp_client_id }}" autocomplete="off"></div>
-    <div><label>Client secret {% if s.pdp_client_secret %}(enregistré){% endif %}</label><input name="pdp_client_secret" type="password" placeholder="{{ '••••••••' if s.pdp_client_secret else '' }}" autocomplete="new-password"></div>
-    <div><label>Adresse de l'API</label><input name="pdp_endpoint" value="{{ s.pdp_endpoint }}"></div>
-    <div><label>E-reporting des clients particuliers à partir du</label><input type="date" name="ereporting_start" value="{{ s.ereporting_start }}"></div>
-    <div class="wide"><label style="display:flex; gap:8px; align-items:center"><input type="checkbox" name="pdp_auto_send" value="1" style="width:auto" {{ 'checked' if s.pdp_auto_send == '1' }}> Transmettre automatiquement chaque facture à un professionnel dès son émission</label></div>
-    {% if s.pdp_address_value %}<div class="wide small muted">Votre adresse de facturation électronique : {{ s.pdp_address_value }} ({{ s.pdp_address_scheme }})</div>{% endif %}
-  </div>
-</div>
-<button class="primary">Enregistrer les réglages</button>
+  <button class="primary">Enregistrer</button>
 </form>
 
-<div class="card" style="margin-top:16px">
+<form method="post" class="card" id="documents">
+  <input type="hidden" name="section" value="documents">
+  <h2>Factures et devis</h2>
+  <div class="section-title">Numérotation</div>
+  <div class="fields">
+    <div><label>Format des factures</label><input name="invoice_pattern" value="{{ s.invoice_pattern }}"></div>
+    <div><label>Prochain n° de facture</label><input name="{{ counters.invoice[0] }}" value="{{ counters.invoice[1] }}"></div>
+    <div><label>Format des avoirs</label><input name="avoir_pattern" value="{{ s.avoir_pattern }}"></div>
+    <div><label>Prochain n° d'avoir</label><input name="{{ counters.avoir[0] }}" value="{{ counters.avoir[1] }}"></div>
+    <div><label>Format des devis</label><input name="devis_pattern" value="{{ s.devis_pattern }}"></div>
+    <div><label>Prochain n° de devis</label><input name="{{ counters.devis[0] }}" value="{{ counters.devis[1] }}"></div>
+    <div class="wide help">{AAAA} année · {MM} mois · {NNN} numéro sur 3 chiffres. L'import MonAE règle ces champs pour continuer votre numérotation.</div>
+  </div>
+  <input type="hidden" name="has_invoice_reset_yearly" value="1">
+  <label class="check-row"><input type="checkbox" name="invoice_reset_yearly" value="1" {{ 'checked' if s.invoice_reset_yearly != '0' }}> Repartir à 1 chaque année (si le format contient l'année)</label>
+  <div class="section-title" style="margin-top:18px">Valeurs par défaut</div>
+  <div class="fields">
+    <div><label>Conditions de règlement</label><select name="default_payment_terms">
+      {% for v, l in PAYMENT_TERMS %}<option value="{{ v }}" {{ 'selected' if s.default_payment_terms == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <div><label>Pénalités de retard (% par an)</label><input name="default_penalty_rate" value="{{ s.default_penalty_rate }}" placeholder="vide = 3× le taux légal"></div>
+    <div><label>Escompte (%)</label><input name="default_discount_rate" value="{{ s.default_discount_rate }}" placeholder="vide = pas d'escompte"></div>
+    <div><label>Taux de TVA</label><input name="default_vat_rate" value="{{ s.default_vat_rate }}"></div>
+    <div><label>Nature de vos prestations</label><select name="default_nature">
+      {% for v, l in NATURES.items() if v != 'debours' %}<option value="{{ v }}" {{ 'selected' if s.default_nature == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <div><label>Validité des devis (jours)</label><input name="devis_validity_days" value="{{ s.devis_validity_days }}"></div>
+  </div>
+  <div class="section-title">Mentions</div>
+  <div class="fields">
+    <div class="wide"><label>Pénalités (texte si aucun taux)</label><input name="late_penalty" value="{{ s.late_penalty }}"></div>
+    <div class="wide"><label>Indemnité de recouvrement (clients pros)</label><input name="recovery_fee" value="{{ s.recovery_fee }}"></div>
+    <div class="wide"><label>Escompte (texte si aucun taux)</label><input name="discount_terms" value="{{ s.discount_terms }}"></div>
+    <div class="wide"><label>Pied de page</label><input name="footer_note" value="{{ s.footer_note }}"></div>
+  </div>
+  <button class="primary">Enregistrer</button>
+</form>
+
+<form method="post" class="card" id="declarations">
+  <input type="hidden" name="section" value="declarations">
+  <h2>TVA et URSSAF</h2>
+  <div class="fields">
+    <div><label>Jour limite de la CA3 (TVA mensuelle)</label><input name="ca3_due_day" value="{{ s.ca3_due_day }}">
+      <div class="help">Indiqué dans votre espace professionnel impots.gouv (entre le 15 et le 24).</div></div>
+    <div><label>Déclaration URSSAF</label><select name="urssaf_period">
+      <option value="trimestre" {{ 'selected' if s.urssaf_period != 'mois' }}>Trimestrielle</option>
+      <option value="mois" {{ 'selected' if s.urssaf_period == 'mois' }}>Mensuelle</option></select></div>
+  </div>
+  <div class="section-title">Taux de cotisations (%)</div>
+  <div class="fields">
+    <div><label>Ventes de marchandises</label><input name="urssaf_rate_vente" value="{{ s.urssaf_rate_vente }}"></div>
+    <div><label>Prestations BIC</label><input name="urssaf_rate_bic" value="{{ s.urssaf_rate_bic }}"></div>
+    <div><label>Prestations BNC</label><input name="urssaf_rate_bnc" value="{{ s.urssaf_rate_bnc }}"></div>
+    <div><label>CFP (formation)</label><input name="cfp_rate" value="{{ s.cfp_rate }}"></div>
+  </div>
+  <input type="hidden" name="has_versement_liberatoire" value="1">
+  <label class="check-row"><input type="checkbox" name="versement_liberatoire" value="1" {{ 'checked' if s.versement_liberatoire == '1' }}> Versement libératoire de l'impôt sur le revenu</label>
+  <div class="fields">
+    <div><label>IR ventes</label><input name="ir_rate_vente" value="{{ s.ir_rate_vente }}"></div>
+    <div><label>IR BIC</label><input name="ir_rate_bic" value="{{ s.ir_rate_bic }}"></div>
+    <div><label>IR BNC</label><input name="ir_rate_bnc" value="{{ s.ir_rate_bnc }}"></div>
+  </div>
+  <button class="primary">Enregistrer</button>
+</form>
+
+<form method="post" class="card" id="pdp">
+  <input type="hidden" name="section" value="pdp">
+  <h2>Plateforme agréée — SUPER PDP</h2>
+  <p class="small muted">Sur superpdp.tech : menu Applications → créer une application, puis recopiez son identifiant et son secret.</p>
+  <div class="fields">
+    <div><label>Client ID</label><input name="pdp_client_id" value="{{ s.pdp_client_id }}" autocomplete="off"></div>
+    <div><label>Client secret {% if s.pdp_client_secret %}<span class="pill green">enregistré</span>{% endif %}</label><input name="pdp_client_secret" type="password" placeholder="{{ '••••••••' if s.pdp_client_secret else '' }}" autocomplete="new-password"></div>
+    <div><label>Adresse de l'API</label><input name="pdp_endpoint" value="{{ s.pdp_endpoint }}"></div>
+    <div><label>E-reporting des particuliers à partir du</label><input type="date" name="ereporting_start" value="{{ s.ereporting_start }}"></div>
+  </div>
+  <input type="hidden" name="has_pdp_auto_send" value="1">
+  <label class="check-row"><input type="checkbox" name="pdp_auto_send" value="1" {{ 'checked' if s.pdp_auto_send == '1' }}> Transmettre automatiquement chaque facture à un professionnel dès sa finalisation</label>
+  {% if s.pdp_address_value %}<p class="small muted">Votre adresse de facturation électronique : {{ s.pdp_address_value }}</p>{% endif %}
+  <div class="actions"><button class="primary">Enregistrer</button></div>
+</form>
+<div class="card">
   <div class="actions">
-    <form method="post" action="{{ url_for('settings_test') }}"><button>Tester la connexion SUPER PDP</button></form>
+    <form method="post" action="{{ url_for('settings_test') }}"><button>Tester la connexion</button></form>
     <form method="post" action="{{ url_for('sync_now') }}"><button>Synchroniser maintenant</button></form>
   </div>
-  <p class="small muted">La synchronisation (statuts des factures, factures reçues, encaissements) se fait aussi toute seule toutes les 30 minutes.</p>
+  <p class="small muted">La synchronisation (statuts, factures reçues, encaissements, achats récurrents) tourne aussi toute seule toutes les 30 minutes.</p>
 </div>
 
 {% if journal %}
 <details class="card"><summary>Journal</summary>
-  {% for j in journal %}<div class="small {{ 'muted' if j.level == 'info' }}" style="{{ 'color:var(--red)' if j.level == 'error' }}">{{ j.at }} — {{ j.message }}</div>{% endfor %}
+  <div style="margin-top:10px">{% for j in journal %}<div class="small" style="{{ 'color:var(--red)' if j.level == 'error' else 'color:var(--muted)' }}">{{ j.at }} — {{ j.message }}</div>{% endfor %}</div>
 </details>
 {% endif %}
 {% endblock %}

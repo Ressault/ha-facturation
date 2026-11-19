@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="head"><h1>{{ 'Achat récurrent' if r else 'Nouvel achat récurrent' }}</h1></div>
+<form method="post" class="card">
+  <datalist id="sups">{% for s in suppliers %}<option value="{{ s.name }}">{% endfor %}</datalist>
+  <div class="fields">
+    <div><label>Fournisseur</label><input name="supplier" list="sups" required value="{{ r.supplier_name if r and r.supplier_name else '' }}" autocomplete="off"></div>
+    <div><label>Libellé</label><input name="title" required value="{{ r.title if r else '' }}" placeholder="ex. Abonnement Spotify"></div>
+    <div><label>Montant HT</label><input name="total_ht" id="ht" inputmode="decimal" value="{{ r.total_ht|qty if r else '' }}"></div>
+    <div><label>TVA</label><input name="total_tva" id="tva" inputmode="decimal" value="{{ r.total_tva|qty if r else '' }}">
+      <div class="help"><a href="#" data-r="20">20 %</a> · <a href="#" data-r="10">10 %</a> · <a href="#" data-r="0">sans TVA</a></div></div>
+    <div><label>Montant TTC</label><input name="total_ttc" id="ttc" inputmode="decimal" value="{{ r.total_ttc|qty if r else '' }}"></div>
+    <div><label>Fréquence</label><select name="every_months">
+      {% for v, l in [(1, 'Tous les mois'), (2, 'Tous les 2 mois'), (3, 'Tous les trimestres'), (6, 'Tous les 6 mois'), (12, 'Tous les ans')] %}
+      <option value="{{ v }}" {{ 'selected' if (r.every_months if r else 1) == v }}>{{ l }}</option>{% endfor %}</select></div>
+    <div><label>Prochaine échéance</label><input type="date" name="next_date" value="{{ r.next_date if r else today }}"></div>
+    <div><label>Nombre maximum (vide = illimité)</label><input name="max_occurrences" inputmode="numeric" value="{{ r.max_occurrences if r and r.max_occurrences else '' }}"></div>
+    <div><label>Moyen de paiement</label><select name="method"><option value="">—</option>
+      {% for m in ['carte', 'prélèvement', 'paypal', 'virement', 'autre'] %}<option {{ 'selected' if r and r.method == m }}>{{ m }}</option>{% endfor %}</select></div>
+    <div><label>Catégorie TVA</label><select name="category">
+      <option value="biens_services" {{ 'selected' if not r or r.category == 'biens_services' }}>Biens et services</option>
+      <option value="immobilisation" {{ 'selected' if r and r.category == 'immobilisation' }}>Immobilisation</option></select></div>
+  </div>
+  <label class="check-row"><input type="checkbox" name="auto_paid" value="1" {{ 'checked' if not r or r.auto_paid }}> Marquer chaque dépense comme payée à l'échéance (prélèvement automatique)</label>
+  <label class="check-row"><input type="checkbox" name="active" value="1" {{ 'checked' if not r or r.active }}> Actif</label>
+  <div class="actions" style="margin-top:12px"><button class="primary">Enregistrer</button><a class="btn" href="{{ url_for('recurring') }}">Annuler</a></div>
+</form>
+{% if r %}<form method="post" action="{{ url_for('recurring_delete', rid=r.id) }}" data-confirm="Supprimer cet achat récurrent ? Les dépenses déjà créées restent."><button class="danger">Supprimer</button></form>{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+const n = v => parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) || 0, f = v => (Math.round(v * 100) / 100).toFixed(2).replace('.', ',');
+document.querySelectorAll('[data-r]').forEach(a => a.addEventListener('click', e => {
+  e.preventDefault(); const r = n(a.dataset.r), ht = document.getElementById('ht'), ttc = document.getElementById('ttc'), tva = document.getElementById('tva');
+  if (n(ht.value)) { const t = n(ht.value) * r / 100; tva.value = f(t); ttc.value = f(n(ht.value) + t); }
+  else if (n(ttc.value)) { const h = n(ttc.value) / (1 + r / 100); ht.value = f(h); tva.value = f(n(ttc.value) - h); }
+}));
+</script>
+{% endblock %}

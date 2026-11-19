@@ -1,7 +1,10 @@
 """Facturation — application web (Flask) servie dans Home Assistant via Ingress."""
+import csv
+import io
 import os
 import threading
 import time
+import zipfile
 from datetime import date, timedelta
 
 from flask import (Flask, abort, flash, jsonify, redirect, render_template, request, send_file,
@@ -9,34 +12,73 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template, requ
 
 import calc
 import db
+import debug_routes
 import importer
 import logic
 import monae
 import superpdp
-from calc import money
-from pdf import fmt_date, fmt_money, fmt_rate
+from calc import NATURES, PAYMENT_TERMS, d, money
+from pdf import fmt_date, fmt_money, fmt_qty, fmt_rate
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FACTU_SECRET", "") or os.urandom(24)
-app.jinja_env.filters.update(money=fmt_money, date=fmt_date, rate=fmt_rate)
+app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
+def fmt_int(v):
+    try:
+        return f"{int(round(float(v))):,}".replace(",", "\u202f")
+    except (TypeError, ValueError):
+        return v
+
+
+app.jinja_env.filters.update(money=fmt_money, date=fmt_date, rate=fmt_rate, qty=fmt_qty, int_fr=fmt_int)
 
 MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre",
         "octobre", "novembre", "décembre"]
+MOIS_COURT = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
 STATUS = {
-    "brouillon": ("Brouillon", "grey"), "emise": ("À encaisser", "blue"), "partielle": ("Payée en partie", "amber"),
-    "payee": ("Payée", "green"), "annulee": ("Annulée par avoir", "grey"), "rembourse": ("Remboursé", "green"),
+    "brouillon": ("Brouillon", "green"), "emise": ("À encaisser", "blue"), "partielle": ("Payée en partie", "amber"),
+    "payee": ("Payée", "grey"), "annulee": ("Annulée", "grey"), "rembourse": ("Remboursé", "grey"),
     "en_attente": ("En attente", "blue"), "accepte": ("Accepté", "green"), "refuse": ("Refusé", "grey"),
-    "facture": ("Facturé", "green"),
+    "facture": ("Facturé", "grey"),
 }
 KIND_LABEL = {"facture": "Facture", "devis": "Devis", "avoir": "Avoir"}
+TERMS = dict(PAYMENT_TERMS)
+PERIODS = [("mois", "Ce mois-ci"), ("mois-1", "Mois dernier"), ("trimestre", "Ce trimestre"),
+           ("trimestre-1", "Trimestre dernier"), ("annee", "Cette année"), ("annee-1", "Année dernière"),
+           ("tout", "Tout"), ("perso", "Personnalisée")]
 
 
 def period_label(period):
-    y, m = period.split("-")
+    if "-T" in period:
+        return f"{period[-2:]} {period[:4]}"
+    y, m = period.split("-")[:2]
     return f"{MOIS[int(m) - 1]} {y}"
 
 
-app.jinja_env.globals.update(STATUS=STATUS, KIND_LABEL=KIND_LABEL, period_label=period_label)
+def period_range(code, start=None, end=None, today=None):
+    """(début inclus, fin exclue) au format ISO pour un code de période."""
+    today = today or date.today()
+    y, m = today.year, today.month
+    if code == "mois":
+        return calc.month_bounds(f"{y:04d}-{m:02d}")
+    if code == "mois-1":
+        return calc.month_bounds(calc.previous_period(today))
+    if code == "trimestre":
+        return calc.quarter_bounds(calc.quarter_of(f"{y:04d}-{m:02d}"))
+    if code == "trimestre-1":
+        return calc.quarter_bounds(calc.previous_quarter(today))
+    if code == "annee":
+        return f"{y:04d}-01-01", f"{y + 1:04d}-01-01"
+    if code == "annee-1":
+        return f"{y - 1:04d}-01-01", f"{y:04d}-01-01"
+    if code == "perso" and (start or end):
+        e = (date.fromisoformat(end) + timedelta(days=1)).isoformat() if end else "9999-12-31"
+        return start or "0000-01-01", e
+    return "0000-01-01", "9999-12-31"
+
+
+app.jinja_env.globals.update(STATUS=STATUS, KIND_LABEL=KIND_LABEL, period_label=period_label, NATURES=NATURES,
+                             TERMS=TERMS, PAYMENT_TERMS=PAYMENT_TERMS, PERIODS=PERIODS, MOIS_COURT=MOIS_COURT)
 
 
 class IngressMiddleware:
@@ -64,26 +106,17 @@ def conn():
 
 
 @app.context_processor
-def inject_banner():
+def inject_globals():
     c = conn()
     try:
         s = db.get_settings(c)
-        today = date.today()
-        period = calc.previous_period(today)
-        declared = c.execute("SELECT 1 FROM declarations WHERE period = ? AND declared_at IS NOT NULL",
-                             (period,)).fetchone()
-        banner = None
-        first_doc = c.execute("SELECT MIN(issue_date) AS m FROM documents WHERE kind = 'facture' "
-                              "AND status != 'brouillon'").fetchone()["m"]
-        if not declared and first_doc and first_doc[:7] <= period:
-            due_day = int(s.get("ca3_due_day") or 19)
-            due = date(today.year, today.month, min(due_day, 28))
-            days = (due - today).days
-            banner = {"period": period, "label": period_label(period), "due": due.isoformat(),
-                      "days": days, "late": days < 0}
+        try:
+            tasks = logic.tasks(c)
+        except Exception:  # noqa: BLE001
+            tasks = []
         setup_missing = not (s.get("company_name") and s.get("siret") and s.get("vat_number"))
-        return {"tva_banner": banner, "setup_missing": setup_missing,
-                "pdp_on": logic.pdp_configured(c), "settings": s}
+        return {"tasks": tasks, "setup_missing": setup_missing, "pdp_on": logic.pdp_configured(c), "settings": s,
+                "today": date.today().isoformat()}
     finally:
         c.close()
 
@@ -96,50 +129,116 @@ def business_error(e):
 
 # -- tableau de bord ----------------------------------------------------------
 
+def sums(c, start, end):
+    """Encaissé, facturé, achats (HT et TTC) entre start et end."""
+    enc = c.execute(
+        "SELECT COALESCE(SUM(CASE WHEN d.kind='avoir' THEN -p.amount ELSE p.amount END),0) ttc, "
+        "COALESCE(SUM(CASE WHEN d.kind='avoir' THEN -1 ELSE 1 END * p.amount * "
+        "CASE WHEN d.total_ttc != 0 THEN d.total_ht / d.total_ttc ELSE 1 END),0) ht "
+        "FROM payments p JOIN documents d ON d.id = p.document_id "
+        "WHERE d.kind IN ('facture','avoir') AND p.date >= ? AND p.date < ?", (start, end)).fetchone()
+    fac = c.execute(
+        "SELECT COALESCE(SUM(CASE WHEN kind='avoir' THEN -total_ttc ELSE total_ttc END),0) ttc, "
+        "COALESCE(SUM(CASE WHEN kind='avoir' THEN -total_ht ELSE total_ht END),0) ht FROM documents "
+        "WHERE kind IN ('facture','avoir') AND status != 'brouillon' AND issue_date >= ? AND issue_date < ?",
+        (start, end)).fetchone()
+    ach = c.execute("SELECT COALESCE(SUM(total_ttc),0) ttc, COALESCE(SUM(total_ht),0) ht FROM purchases "
+                    "WHERE invoice_date >= ? AND invoice_date < ?", (start, end)).fetchone()
+    return {"enc": {"ht": enc["ht"], "ttc": enc["ttc"]}, "fac": {"ht": fac["ht"], "ttc": fac["ttc"]},
+            "ach": {"ht": ach["ht"], "ttc": ach["ttc"]}}
+
+
+def open_invoices(c):
+    rows = c.execute(
+        "SELECT d.*, cl.name AS client_name, "
+        "(SELECT COALESCE(SUM(amount),0) FROM payments WHERE document_id=d.id) AS paid, "
+        "(SELECT COALESCE(SUM(total_ttc),0) FROM documents a WHERE a.avoir_of_id=d.id AND a.kind='avoir' "
+        " AND a.status!='brouillon') AS credited "
+        "FROM documents d LEFT JOIN clients cl ON cl.id=d.client_id WHERE d.kind='facture' "
+        "AND d.status IN ('emise','partielle') ORDER BY d.due_date, d.id").fetchall()
+    out = []
+    for r in rows:
+        rest = money(r["total_ttc"]) - money(r["paid"]) - money(r["credited"])
+        if rest <= 0:
+            continue
+        ratio = d(r["total_ht"]) / d(r["total_ttc"]) if r["total_ttc"] else d(1)
+        out.append(dict(r, rest_ttc=float(rest), rest_ht=float(money(rest * ratio))))
+    return out
+
+
 @app.route("/")
 def index():
     c = conn()
     try:
         today = date.today()
+        y = today.year
         month = today.strftime("%Y-%m")
-        start, end = calc.month_bounds(month)
-        encaisse = c.execute("SELECT COALESCE(SUM(p.amount),0) s FROM payments p JOIN documents d ON d.id=p.document_id "
-                             "WHERE d.kind='facture' AND p.date>=? AND p.date<?", (start, end)).fetchone()["s"]
-        factures_mois = c.execute("SELECT COALESCE(SUM(total_ttc),0) s FROM documents WHERE kind='facture' "
-                                  "AND status!='brouillon' AND issue_date>=? AND issue_date<?",
-                                  (start, end)).fetchone()["s"]
-        unpaid = c.execute(
-            "SELECT d.*, c.name AS client_name, (SELECT COALESCE(SUM(amount),0) FROM payments WHERE document_id=d.id) AS paid "
-            "FROM documents d LEFT JOIN clients c ON c.id=d.client_id WHERE d.kind='facture' "
-            "AND d.status IN ('emise','partielle') ORDER BY d.due_date").fetchall()
-        reste = sum(money(u["total_ttc"]) - money(u["paid"]) for u in unpaid)
+        q = calc.quarter_of(month)
+        m_s, m_e = calc.month_bounds(month)
+        q_s, q_e = calc.quarter_bounds(q)
+        stats = {"mois": sums(c, m_s, m_e), "trimestre": sums(c, q_s, q_e),
+                 "annee": sums(c, f"{y}-01-01", f"{y + 1}-01-01")}
+        unpaid = open_invoices(c)
         late = [u for u in unpaid if u["due_date"] and u["due_date"] < today.isoformat()]
-        recent = c.execute("SELECT d.*, c.name AS client_name FROM documents d LEFT JOIN clients c ON c.id=d.client_id "
-                           "ORDER BY d.id DESC LIMIT 8").fetchall()
-        devis_open = c.execute("SELECT COUNT(*) n FROM documents WHERE kind='devis' AND status='en_attente'").fetchone()["n"]
+        rest = {"ht": sum(u["rest_ht"] for u in unpaid), "ttc": sum(u["rest_ttc"] for u in unpaid)}
+        late_sum = {"ht": sum(u["rest_ht"] for u in late), "ttc": sum(u["rest_ttc"] for u in late)}
+        drafts = c.execute("SELECT d.*, cl.name AS client_name FROM documents d LEFT JOIN clients cl ON "
+                           "cl.id=d.client_id WHERE d.status='brouillon' ORDER BY d.issue_date DESC, d.id DESC"
+                           ).fetchall()
+        devis = c.execute("SELECT d.*, cl.name AS client_name FROM documents d LEFT JOIN clients cl ON "
+                          "cl.id=d.client_id WHERE d.kind='devis' AND d.status='en_attente' "
+                          "ORDER BY d.issue_date DESC LIMIT 100").fetchall()
+        chart = []
+        yy, mm = today.year, today.month
+        for i in range(11, -1, -1):
+            k = yy * 12 + (mm - 1) - i
+            per = f"{k // 12:04d}-{k % 12 + 1:02d}"
+            s_, e_ = calc.month_bounds(per)
+            sm = sums(c, s_, e_)
+            chart.append({"label": MOIS_COURT[k % 12], "year": k // 12, "enc": sm["enc"], "fac": sm["fac"]})
         errors = c.execute("SELECT COUNT(*) n FROM documents WHERE pdp_error IS NOT NULL AND pdp_id IS NULL "
                            "AND status!='brouillon'").fetchone()["n"]
-        return render_template("index.html", encaisse=encaisse, factures_mois=factures_mois, unpaid=unpaid,
-                               reste=reste, late=late, recent=recent, devis_open=devis_open,
-                               month_label=period_label(month), pdp_errors=errors)
+        return render_template("index.html", stats=stats, unpaid=unpaid, late=late, rest=rest, late_sum=late_sum,
+                               drafts=drafts, devis=devis, chart=chart, month_label=period_label(month),
+                               quarter_label=f"T{q[-1]} {q[:4]}", year=y, pdp_errors=errors)
     finally:
         c.close()
+
+
+@app.route("/taches/<path:task_id>", methods=["POST"])
+def task_toggle(task_id):
+    with db.transaction() as c:
+        logic.mark_task(c, task_id, request.form.get("undo") != "1")
+    if request.headers.get("X-Requested-With") == "fetch":
+        return jsonify({"ok": True})
+    return redirect(request.referrer or url_for("index"))
 
 
 # -- clients ------------------------------------------------------------------
 
 @app.route("/clients")
 def clients():
+    q = (request.args.get("q") or "").strip()
     c = conn()
     try:
-        rows = c.execute(
-            "SELECT cl.*, (SELECT COUNT(*) FROM documents d WHERE d.client_id=cl.id AND d.kind='facture' "
-            "AND d.status!='brouillon') AS n_fact, (SELECT COALESCE(SUM(total_ht),0) FROM documents d WHERE "
-            "d.client_id=cl.id AND d.kind='facture' AND d.status!='brouillon') AS ca FROM clients cl ORDER BY cl.name"
-        ).fetchall()
-        return render_template("clients.html", clients=rows)
+        sql = ("SELECT cl.*, (SELECT COUNT(*) FROM documents d WHERE d.client_id=cl.id AND d.kind='facture' "
+               "AND d.status!='brouillon') AS n_fact, (SELECT COALESCE(SUM(CASE WHEN kind='avoir' THEN -total_ht "
+               "ELSE total_ht END),0) FROM documents d WHERE d.client_id=cl.id AND d.kind IN ('facture','avoir') "
+               "AND d.status!='brouillon') AS ca, (SELECT MAX(issue_date) FROM documents d WHERE d.client_id=cl.id) "
+               "AS last_doc FROM clients cl")
+        args = []
+        if q:
+            sql += " WHERE cl.name LIKE ? OR cl.siren LIKE ? OR cl.city LIKE ? OR cl.email LIKE ?"
+            args = [f"%{q}%"] * 4
+        rows = c.execute(sql + " ORDER BY cl.name COLLATE NOCASE", args).fetchall()
+        orphans = sum(1 for r in rows if not r["last_doc"])
+        return render_template("clients.html", clients=rows, q=q, orphans=orphans)
     finally:
         c.close()
+
+
+CLIENT_FIELDS = ["kind", "name", "siren", "vat_number", "address", "post_code", "city", "country", "email",
+                 "phone", "pdp_address_scheme", "pdp_address_value", "notes"]
 
 
 @app.route("/clients/nouveau", methods=["GET", "POST"])
@@ -149,11 +248,9 @@ def client_form(client_id=None):
     try:
         if request.method == "POST":
             f = request.form
-            vals = {k: (f.get(k) or "").strip() for k in
-                    ["kind", "name", "siren", "vat_number", "address", "post_code", "city", "country", "email",
-                     "phone", "pdp_address_scheme", "pdp_address_value", "notes"]}
-            vals["siren"] = vals["siren"].replace(" ", "")
-            vals["country"] = (vals["country"] or "FR").upper()
+            vals = {k: (f.get(k) or "").strip() for k in CLIENT_FIELDS}
+            vals["siren"] = "".join(ch for ch in vals["siren"] if ch.isdigit())[:9]
+            vals["country"] = (vals["country"] or "FR").upper()[:2]
             if not vals["name"]:
                 raise logic.BusinessError("Le nom du client est obligatoire.")
             if vals["kind"] == "pro" and vals["siren"] and not vals["vat_number"] and vals["country"] == "FR":
@@ -167,17 +264,37 @@ def client_form(client_id=None):
             c.commit()
             flash("Client enregistré.", "ok")
             nxt = request.args.get("next")
-            if nxt == "facture":
-                return redirect(url_for("doc_new", kind="facture", client_id=client_id))
-            if nxt == "devis":
-                return redirect(url_for("doc_new", kind="devis", client_id=client_id))
+            if nxt in ("facture", "devis"):
+                return redirect(url_for("doc_new", kind=nxt, client_id=client_id))
             return redirect(url_for("client_form", client_id=client_id))
         client = c.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone() if client_id else None
         docs = c.execute("SELECT * FROM documents WHERE client_id=? ORDER BY issue_date DESC, id DESC",
                          (client_id,)).fetchall() if client_id else []
-        return render_template("client_form.html", client=client, docs=docs)
+        ca = sum((-1 if x["kind"] == "avoir" else 1) * (x["total_ht"] or 0) for x in docs
+                 if x["kind"] in ("facture", "avoir") and x["status"] != "brouillon")
+        return render_template("client_form.html", client=client, docs=docs, ca=ca)
     finally:
         c.close()
+
+
+@app.route("/clients/vers-fournisseurs", methods=["POST"])
+def clients_to_suppliers():
+    ids = [int(x) for x in request.form.getlist("ids") if x.isdigit()]
+    with db.transaction() as c:
+        n = logic.move_clients_to_suppliers(c, ids)
+    flash(f"{n} contact(s) déplacé(s) dans les fournisseurs." if n else
+          "Aucun contact déplacé (un contact déjà facturé reste un client).", "ok" if n else "error")
+    return redirect(request.referrer or url_for("suppliers"))
+
+
+@app.route("/clients/<int:client_id>/supprimer", methods=["POST"])
+def client_delete(client_id):
+    with db.transaction() as c:
+        if c.execute("SELECT 1 FROM documents WHERE client_id=?", (client_id,)).fetchone():
+            raise logic.BusinessError("Ce client a des documents : il ne peut pas être supprimé.")
+        c.execute("DELETE FROM clients WHERE id=?", (client_id,))
+    flash("Client supprimé.", "ok")
+    return redirect(url_for("clients"))
 
 
 @app.route("/api/siren/<siren>")
@@ -187,9 +304,7 @@ def api_siren(siren):
         siren = "".join(ch for ch in siren if ch.isdigit())[:9]
         try:
             info = logic.lookup_siren(c, siren)
-        except superpdp.PDPError as e:
-            return jsonify({"error": str(e)}), 502
-        except Exception as e:  # réseau
+        except Exception as e:  # noqa: BLE001 — réseau ou annuaire
             return jsonify({"error": f"Recherche impossible : {e}"}), 502
         info["vat_number"] = logic.vat_number_from_siren(siren)
         return jsonify(info)
@@ -199,25 +314,128 @@ def api_siren(siren):
 
 # -- documents ----------------------------------------------------------------
 
+def doc_filters(args, kind):
+    return {
+        "statut": args.get("statut", ""), "type": args.get("type", "facture_le"),
+        "periode": args.get("periode", "tout"),
+        "du": args.get("du", ""), "au": args.get("au", ""), "q": (args.get("q") or "").strip(),
+    }
+
+
+def query_documents(c, kind, f):
+    start, end = period_range(f["periode"], f["du"] or None, f["au"] or None)
+    kinds = ("facture", "avoir") if kind == "facture" else (kind,)
+    sql = ("SELECT d.*, cl.name AS client_name, "
+           "(SELECT COALESCE(SUM(amount),0) FROM payments WHERE document_id=d.id) AS paid, "
+           "(SELECT MAX(date) FROM payments WHERE document_id=d.id) AS paid_on, "
+           "(SELECT COALESCE(SUM(total_ttc),0) FROM documents a WHERE a.avoir_of_id=d.id AND a.kind='avoir' "
+           " AND a.status!='brouillon') AS credited "
+           f"FROM documents d LEFT JOIN clients cl ON cl.id=d.client_id WHERE d.kind IN ({','.join('?' * len(kinds))})")
+    args = list(kinds)
+    if f["periode"] != "tout":
+        if f["type"] == "encaisse_le" and kind == "facture":
+            sql += " AND EXISTS (SELECT 1 FROM payments p WHERE p.document_id=d.id AND p.date >= ? AND p.date < ?)"
+        else:
+            sql += " AND COALESCE(d.issue_date, '') >= ? AND COALESCE(d.issue_date, '') < ?"
+        args += [start, end]
+    st = f["statut"]
+    today = date.today().isoformat()
+    if st == "brouillons":
+        sql += " AND d.status='brouillon'"
+    elif st == "payees":
+        sql += " AND d.kind='facture' AND d.status='payee'"
+    elif st == "non_payees":
+        sql += " AND d.kind='facture' AND d.status IN ('emise','partielle')"
+    elif st == "echues":
+        sql += " AND d.kind='facture' AND d.status IN ('emise','partielle') AND d.due_date < ?"
+        args.append(today)
+    elif st == "avoirs":
+        sql += " AND d.kind='avoir'"
+    elif st == "annulees":
+        sql += " AND d.status='annulee'"
+    elif st in ("en_attente", "accepte", "refuse", "facture"):
+        sql += " AND d.status=?"
+        args.append(st)
+    if f["q"]:
+        sql += " AND (cl.name LIKE ? OR d.subject LIKE ? OR d.number LIKE ?)"
+        args += [f"%{f['q']}%"] * 3
+    sql += " ORDER BY (d.status='brouillon') DESC, COALESCE(d.issue_date,'') DESC, d.id DESC"
+    rows = [dict(r) for r in c.execute(sql, args).fetchall()]
+    tot = {"n": 0, "ht": d(0), "ttc": d(0), "rest": d(0), "enc": d(0)}
+    for r in rows:
+        sign = -1 if r["kind"] == "avoir" else 1
+        r["sign"] = sign
+        r["late"] = bool(r["kind"] == "facture" and r["status"] in ("emise", "partielle") and r["due_date"]
+                         and r["due_date"] < today)
+        r["rest"] = float(money(r["total_ttc"]) - money(r["paid"]) - money(r["credited"])) \
+            if r["kind"] == "facture" and r["status"] in ("emise", "partielle") else 0.0
+        if r["status"] == "brouillon":
+            continue
+        tot["n"] += 1
+        tot["ht"] += sign * d(r["total_ht"])
+        tot["ttc"] += sign * d(r["total_ttc"])
+        tot["rest"] += d(r["rest"])
+    if f["type"] == "encaisse_le" and f["periode"] != "tout" and kind == "facture":
+        tot["enc"] = d(c.execute(
+            "SELECT COALESCE(SUM(CASE WHEN d.kind='avoir' THEN -p.amount ELSE p.amount END),0) s FROM payments p "
+            "JOIN documents d ON d.id=p.document_id WHERE p.date >= ? AND p.date < ?", (start, end)).fetchone()["s"])
+    return rows, tot
+
+
 @app.route("/documents")
 def documents():
     kind = request.args.get("kind", "facture")
-    year = request.args.get("annee", "")
+    if kind == "avoir":
+        return redirect(url_for("documents", kind="facture", statut="avoirs"))
+    f = doc_filters(request.args, kind)
     c = conn()
     try:
-        q = ("SELECT d.*, c.name AS client_name, (SELECT COALESCE(SUM(amount),0) FROM payments WHERE document_id=d.id) "
-             "AS paid FROM documents d LEFT JOIN clients c ON c.id=d.client_id WHERE d.kind=?")
-        args = [kind]
-        if year:
-            q += " AND substr(d.issue_date,1,4)=?"
-            args.append(year)
-        q += " ORDER BY (d.status='brouillon') DESC, d.issue_date DESC, d.id DESC"
-        rows = c.execute(q, args).fetchall()
-        years = [r["y"] for r in c.execute("SELECT DISTINCT substr(issue_date,1,4) y FROM documents WHERE kind=? "
-                                           "ORDER BY y DESC", (kind,)).fetchall() if r["y"]]
-        return render_template("documents.html", docs=rows, kind=kind, years=years, year=year)
+        rows, tot = query_documents(c, kind, f)
+        return render_template("documents.html", docs=rows, kind=kind, f=f, tot=tot)
     finally:
         c.close()
+
+
+@app.route("/documents/export.csv")
+def documents_csv():
+    kind = request.args.get("kind", "facture")
+    f = doc_filters(request.args, kind)
+    c = conn()
+    try:
+        rows, _ = query_documents(c, kind, f)
+        out = io.StringIO()
+        w = csv.writer(out, delimiter=";")
+        w.writerow(["Type", "Numéro", "Date", "Client", "Objet", "Total HT", "TVA", "Total TTC", "Échéance",
+                    "Statut", "Payé le", "Reste dû"])
+        for r in rows:
+            s = r["sign"]
+            w.writerow([KIND_LABEL[r["kind"]], r["number"] or "brouillon", fmt_date(r["issue_date"]), r["client_name"],
+                        r["subject"] or "", _n(s * r["total_ht"]), _n(s * r["total_tva"]), _n(s * r["total_ttc"]),
+                        fmt_date(r["due_date"]), STATUS[r["status"]][0], fmt_date(r["paid_on"]), _n(r["rest"])])
+        return _csv_response(out.getvalue(), f"{'devis' if kind == 'devis' else 'ventes'}.csv")
+    finally:
+        c.close()
+
+
+def _n(v):
+    return f"{money(v):.2f}".replace(".", ",")
+
+
+def _csv_response(text, name):
+    return send_file(io.BytesIO(("﻿" + text).encode("utf-8")), mimetype="text/csv", as_attachment=True,
+                     download_name=name)
+
+
+def default_doc(c, kind, client_id=None):
+    s = db.get_settings(c)
+    today = date.today()
+    terms = s.get("default_payment_terms") or "30-inv"
+    return {"id": None, "kind": kind, "client_id": client_id, "issue_date": today.isoformat(), "status": "brouillon",
+            "validity_date": (today + timedelta(days=int(s.get("devis_validity_days") or 30))).isoformat()
+            if kind == "devis" else None,
+            "due_date": logic.due_date_for(today.isoformat(), terms), "payment_terms": terms,
+            "penalty_rate": s.get("default_penalty_rate") or None, "discount_rate": s.get("default_discount_rate") or None,
+            "subject": "", "notes": "", "service_date": "", "avoir_of_id": None, "source_devis_id": None}
 
 
 @app.route("/documents/nouveau")
@@ -228,15 +446,11 @@ def doc_new():
     c = conn()
     try:
         s = db.get_settings(c)
-        today = date.today()
-        doc = {"id": None, "kind": kind, "client_id": request.args.get("client_id", type=int),
-               "issue_date": today.isoformat(), "status": "brouillon",
-               "validity_date": (today + timedelta(days=int(s.get("devis_validity_days") or 30))).isoformat()
-               if kind == "devis" else None, "due_date": None, "subject": "", "notes": "", "service_date": ""}
-        lines = [{"designation": "", "description": "", "quantity": 1, "unit": "u", "unit_price": "",
-                  "vat_rate": float(s.get("default_vat_rate") or 20)}]
-        return render_template("doc_form.html", doc=doc, lines=lines, clients=all_clients(c),
-                               catalog=catalog(c), preview=logic.preview_number(c, kind, today.isoformat()))
+        doc = default_doc(c, kind, request.args.get("client_id", type=int))
+        lines = [{"kind": "item", "designation": "", "description": "", "quantity": 1, "unit": "u", "unit_price": "",
+                  "vat_rate": float(s.get("default_vat_rate") or 20), "nature": s.get("default_nature") or "bnc"}]
+        return render_template("doc_form.html", doc=doc, lines=lines, clients=all_clients(c), catalog=catalog(c),
+                               preview=logic.preview_number(c, kind, date.today().isoformat()))
     finally:
         c.close()
 
@@ -247,10 +461,12 @@ def doc_edit(doc_id):
     try:
         doc, lines = logic.get_doc(c, doc_id)
         if doc["kind"] != "devis" and doc["status"] != "brouillon":
-            flash("Une facture émise ne se modifie plus : créez un avoir.", "error")
+            flash("Une facture finalisée ne se modifie plus. Pour la corriger : Supprimer (un avoir est créé), "
+                  "puis Dupliquer.", "error")
             return redirect(url_for("doc_view", doc_id=doc_id))
         return render_template("doc_form.html", doc=doc, lines=lines, clients=all_clients(c), catalog=catalog(c),
-                               preview=None)
+                               preview=logic.preview_number(c, doc["kind"], doc["issue_date"] or date.today().isoformat())
+                               if doc["status"] == "brouillon" else None)
     finally:
         c.close()
 
@@ -259,17 +475,20 @@ def doc_edit(doc_id):
 def doc_save():
     f = request.form
     doc_id = f.get("id", type=int)
+    keys = ["kind_line", "designation", "description", "quantity", "unit", "unit_price", "vat_rate", "nature"]
+    cols = {k: f.getlist(k) for k in keys}
     lines = []
-    for i in range(len(f.getlist("designation"))):
-        lines.append({k: f.getlist(k)[i] for k in
-                      ["designation", "description", "quantity", "unit", "unit_price", "vat_rate"]})
+    for i in range(len(cols["designation"])):
+        ln = {k: (cols[k][i] if i < len(cols[k]) else "") for k in keys}
+        ln["kind"] = ln.pop("kind_line") or "item"
+        lines.append(ln)
     with db.transaction() as c:
         doc_id = logic.save_document(c, doc_id, f.to_dict(), lines)
         if f.get("action") == "valider":
             logic.validate_document(c, doc_id)
     if f.get("action") == "valider":
         return after_validation(doc_id)
-    flash("Enregistré.", "ok")
+    flash("Brouillon enregistré." if f.get("kind") != "devis" else "Devis enregistré.", "ok")
     return redirect(url_for("doc_view", doc_id=doc_id))
 
 
@@ -278,7 +497,7 @@ def after_validation(doc_id):
     try:
         s = db.get_settings(c)
         doc, _ = logic.get_doc(c, doc_id)
-        flash(f"{KIND_LABEL[doc['kind']]} {doc['number']} émise.", "ok")
+        flash(f"{KIND_LABEL[doc['kind']]} {doc['number']} finalisée.", "ok")
         if logic.pdp_configured(c) and s.get("pdp_auto_send") == "1":
             try:
                 pid = logic.send_to_pdp(c, doc_id)
@@ -310,9 +529,20 @@ def doc_view(doc_id):
         invoices_from = c.execute("SELECT id, number, status FROM documents WHERE source_devis_id=?",
                                   (doc_id,)).fetchall()
         remaining = money(doc["total_ttc"]) - paid - money(credited)
-        return render_template("doc_view.html", doc=doc, lines=lines, client=client, t=t, payments=payments,
+        prev, nxt = logic.neighbours(c, doc)
+        running = d(0)
+        shown = []
+        for ln in lines:
+            ln = dict(ln)
+            if (ln.get("kind") or "item") == "item":
+                running += calc.line_net(ln)
+            elif ln["kind"] == "subtotal":
+                ln["subtotal"] = float(running)
+                running = d(0)
+            shown.append(ln)
+        return render_template("doc_view.html", doc=doc, lines=shown, client=client, t=t, payments=payments,
                                paid=paid, credited=credited, remaining=remaining, avoirs=avoirs, origin=origin,
-                               invoices_from=invoices_from, today=date.today().isoformat())
+                               invoices_from=invoices_from, prev=prev, nxt=nxt)
     finally:
         c.close()
 
@@ -323,7 +553,8 @@ def doc_pdf(doc_id):
     try:
         doc, lines = logic.get_doc(c, doc_id)
         path = doc["pdf_path"]
-        if doc["status"] == "brouillon" or not path or not os.path.exists(path):
+        if doc["status"] == "brouillon" or (doc["kind"] == "devis" and not doc["imported"]) \
+                or not path or not os.path.exists(path):
             path, *_ = logic.render_pdf(c, doc, lines, final=doc["status"] != "brouillon")
             c.commit()
         name = f"{KIND_LABEL[doc['kind']]} {doc['number'] or 'brouillon'}.pdf"
@@ -358,8 +589,12 @@ def doc_send(doc_id):
 def doc_to_invoice(doc_id):
     with db.transaction() as c:
         new_id = logic.duplicate_as(c, doc_id, "facture")
+        s = db.get_settings(c)
+        terms = s.get("default_payment_terms") or "30-inv"
+        c.execute("UPDATE documents SET payment_terms=COALESCE(payment_terms, ?), due_date=? WHERE id=?",
+                  (terms, logic.due_date_for(date.today().isoformat(), terms), new_id))
         c.execute("UPDATE documents SET status='accepte' WHERE id=? AND status='en_attente'", (doc_id,))
-    flash("Facture préparée à partir du devis : vérifiez puis émettez-la.", "ok")
+    flash("Brouillon de facture créé à partir du devis : vérifiez puis finalisez-le.", "ok")
     return redirect(url_for("doc_edit", doc_id=new_id))
 
 
@@ -368,9 +603,9 @@ def doc_to_avoir(doc_id):
     with db.transaction() as c:
         doc, _ = logic.get_doc(c, doc_id)
         if doc["kind"] != "facture" or doc["status"] == "brouillon":
-            raise logic.BusinessError("Un avoir se fait sur une facture émise.")
+            raise logic.BusinessError("Un avoir se fait sur une facture finalisée.")
         new_id = logic.duplicate_as(c, doc_id, "avoir", avoir=True)
-    flash("Avoir préparé : ajustez les lignes (montants positifs) puis émettez-le.", "ok")
+    flash("Avoir partiel en brouillon : ajustez les lignes puis finalisez-le.", "ok")
     return redirect(url_for("doc_edit", doc_id=new_id))
 
 
@@ -380,9 +615,14 @@ def doc_duplicate(doc_id):
         doc, _ = logic.get_doc(c, doc_id)
         kind = "devis" if doc["kind"] == "devis" else "facture"
         new_id = logic.duplicate_as(c, doc_id, kind)
+        s = db.get_settings(c)
+        terms = doc.get("payment_terms") or s.get("default_payment_terms") or "30-inv"
+        c.execute("UPDATE documents SET due_date=?, avoir_of_id=NULL WHERE id=?",
+                  (logic.due_date_for(date.today().isoformat(), terms), new_id))
         if kind == "devis":
             n = logic.next_number(c, "devis", date.today().isoformat())
             c.execute("UPDATE documents SET number=?, status='en_attente', source_devis_id=NULL WHERE id=?", (n, new_id))
+    flash("Copie créée en brouillon." if kind == "facture" else "Devis dupliqué.", "ok")
     return redirect(url_for("doc_edit", doc_id=new_id))
 
 
@@ -398,13 +638,33 @@ def devis_status(doc_id):
 
 @app.route("/documents/<int:doc_id>/supprimer", methods=["POST"])
 def doc_delete(doc_id):
+    """Brouillon ou devis : suppression réelle. Facture finalisée : annulation automatique par avoir."""
+    avoir = None
     with db.transaction() as c:
         doc, _ = logic.get_doc(c, doc_id)
-        if doc["kind"] != "devis" and doc["status"] != "brouillon":
-            raise logic.BusinessError("Une facture émise ne peut pas être supprimée : faites un avoir.")
-        c.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+        if doc["kind"] == "facture" and doc["status"] != "brouillon":
+            avoir_id = logic.cancel_invoice(c, doc_id)
+            avoir, _ = logic.get_doc(c, avoir_id)
+        else:
+            if doc["kind"] == "avoir" and doc["status"] != "brouillon":
+                raise logic.BusinessError("Un avoir finalisé ne peut pas être supprimé.")
+            c.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+    if avoir:
+        flash(f"Facture {doc['number']} supprimée : l'avoir {avoir['number']} a été créé automatiquement.", "ok")
+        c = conn()
+        try:
+            if doc.get("pdp_id") and logic.pdp_configured(c):
+                try:
+                    logic.send_to_pdp(c, avoir["id"])
+                    flash("Avoir transmis au client via la plateforme agréée.", "ok")
+                except logic.BusinessError as e:
+                    flash(f"Avoir non transmis à la plateforme : {e}", "error")
+                c.commit()
+        finally:
+            c.close()
+        return redirect(url_for("doc_view", doc_id=avoir["id"]))
     flash("Supprimé.", "ok")
-    return redirect(url_for("documents", kind=doc["kind"]))
+    return redirect(url_for("documents", kind="devis" if doc["kind"] == "devis" else "facture"))
 
 
 @app.route("/documents/<int:doc_id>/paiement", methods=["POST"])
@@ -434,15 +694,65 @@ def payment_delete(payment_id):
     return redirect(url_for("doc_view", doc_id=p["document_id"]) if p else url_for("index"))
 
 
-# -- achats -------------------------------------------------------------------
+# -- achats : dépenses, fournisseurs, récurrents --------------------------------
+
+def purchase_filters(args):
+    return {"periode": args.get("periode", "annee"), "du": args.get("du", ""), "au": args.get("au", ""),
+            "type": args.get("type", "facture_le"), "statut": args.get("statut", ""),
+            "q": (args.get("q") or "").strip()}
+
+
+def query_purchases(c, f):
+    start, end = period_range(f["periode"], f["du"] or None, f["au"] or None)
+    col = "paid_date" if f["type"] == "paye_le" else "invoice_date"
+    sql = "SELECT p.*, s.name AS supplier_name FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id WHERE 1=1"
+    args = []
+    if f["periode"] != "tout":
+        sql += f" AND COALESCE(p.{col}, '') >= ? AND COALESCE(p.{col}, '') < ?"
+        args += [start, end]
+    if f["statut"] == "non_payees":
+        sql += " AND p.paid_date IS NULL"
+    elif f["statut"] == "payees":
+        sql += " AND p.paid_date IS NOT NULL"
+    elif f["statut"] == "sans_deduction":
+        sql += " AND p.deduction_date IS NULL"
+    if f["q"]:
+        sql += " AND (p.supplier LIKE ? OR s.name LIKE ? OR p.description LIKE ? OR p.invoice_number LIKE ?)"
+        args += [f"%{f['q']}%"] * 4
+    sql += " ORDER BY (p.deduction_date IS NULL AND p.source='pdp') DESC, COALESCE(p.invoice_date,'') DESC, p.id DESC"
+    rows = c.execute(sql, args).fetchall()
+    tot = {"n": len(rows), "ht": sum(r["total_ht"] or 0 for r in rows), "ttc": sum(r["total_ttc"] or 0 for r in rows),
+           "tva": sum(r["total_tva"] or 0 for r in rows)}
+    return rows, tot
+
 
 @app.route("/achats")
 def purchases():
+    f = purchase_filters(request.args)
     c = conn()
     try:
-        rows = c.execute("SELECT * FROM purchases ORDER BY (deduction_date IS NULL) DESC, "
-                         "COALESCE(deduction_date, invoice_date) DESC, id DESC").fetchall()
-        return render_template("purchases.html", purchases=rows, today=date.today().isoformat())
+        logic.generate_recurring(c)
+        c.commit()
+        rows, tot = query_purchases(c, f)
+        return render_template("purchases.html", purchases=rows, f=f, tot=tot)
+    finally:
+        c.close()
+
+
+@app.route("/achats/export.csv")
+def purchases_csv():
+    f = purchase_filters(request.args)
+    c = conn()
+    try:
+        rows, _ = query_purchases(c, f)
+        out = io.StringIO()
+        w = csv.writer(out, delimiter=";")
+        w.writerow(["Date", "Réf.", "Fournisseur", "Libellé", "HT", "TVA", "TTC", "Réglé le", "Mode", "TVA déduite en"])
+        for r in rows:
+            w.writerow([fmt_date(r["invoice_date"]), r["invoice_number"] or "", r["supplier_name"] or r["supplier"],
+                        r["description"] or "", _n(r["total_ht"]), _n(r["total_tva"]), _n(r["total_ttc"]),
+                        fmt_date(r["paid_date"]), r["method"] or "", (r["deduction_date"] or "")[:7]])
+        return _csv_response(out.getvalue(), "achats.csv")
     finally:
         c.close()
 
@@ -456,24 +766,31 @@ def purchase_form(pid=None):
             f = request.form
             ht, tva = money(f.get("total_ht") or 0), money(f.get("total_tva") or 0)
             ttc = money(f.get("total_ttc") or 0) or ht + tva
-            vals = {"supplier": f.get("supplier", "").strip(), "invoice_number": f.get("invoice_number"),
+            name = (f.get("supplier") or "").strip()
+            if not name:
+                raise logic.BusinessError("Indiquez le fournisseur.")
+            sid = logic.supplier_id_for(c, name)
+            vals = {"supplier": name, "supplier_id": sid, "invoice_number": f.get("invoice_number"),
                     "invoice_date": f.get("invoice_date") or None, "description": f.get("description"),
                     "total_ht": float(ht), "total_tva": float(tva), "total_ttc": float(ttc),
-                    "category": f.get("category") or "biens_services",
-                    "paid_date": f.get("paid_date") or None,
+                    "category": f.get("category") or "biens_services", "nature": f.get("nature") or "services",
+                    "method": f.get("method") or None, "paid_date": f.get("paid_date") or None,
+                    "due_date": f.get("due_date") or None, "notes": f.get("notes") or None,
                     "deduction_date": f.get("deduction_date") or f.get("paid_date") or None}
-            if not vals["supplier"]:
-                raise logic.BusinessError("Indiquez le fournisseur.")
+            if vals["nature"] == "biens" and not f.get("deduction_date") and vals["invoice_date"]:
+                vals["deduction_date"] = vals["invoice_date"]
             if pid:
                 c.execute(f"UPDATE purchases SET {', '.join(k + '=?' for k in vals)} WHERE id=?", (*vals.values(), pid))
             else:
                 c.execute(f"INSERT INTO purchases ({', '.join(vals)}) VALUES ({', '.join('?' for _ in vals)})",
                           tuple(vals.values()))
             c.commit()
-            flash("Achat enregistré.", "ok")
+            flash("Dépense enregistrée.", "ok")
             return redirect(url_for("purchases"))
         p = c.execute("SELECT * FROM purchases WHERE id=?", (pid,)).fetchone() if pid else None
-        return render_template("purchase_form.html", p=p, today=date.today().isoformat())
+        sups = c.execute("SELECT name FROM suppliers ORDER BY name COLLATE NOCASE").fetchall()
+        return render_template("purchase_form.html", p=p, suppliers=sups,
+                               preset=request.args.get("fournisseur", ""))
     finally:
         c.close()
 
@@ -490,7 +807,8 @@ def purchase_paid(pid):
 @app.route("/achats/<int:pid>/supprimer", methods=["POST"])
 def purchase_delete(pid):
     with db.transaction() as c:
-        c.execute("DELETE FROM purchases WHERE id=? AND source='manuel'", (pid,))
+        c.execute("DELETE FROM purchases WHERE id=? AND source != 'pdp'", (pid,))
+    flash("Dépense supprimée.", "ok")
     return redirect(url_for("purchases"))
 
 
@@ -506,7 +824,127 @@ def purchase_file(pid):
         c.close()
 
 
-# -- TVA ----------------------------------------------------------------------
+@app.route("/fournisseurs")
+def suppliers():
+    q = (request.args.get("q") or "").strip()
+    c = conn()
+    try:
+        sql = ("SELECT s.*, (SELECT COUNT(*) FROM purchases p WHERE p.supplier_id=s.id) n, "
+               "(SELECT COALESCE(SUM(total_ht),0) FROM purchases p WHERE p.supplier_id=s.id) ht, "
+               "(SELECT MAX(invoice_date) FROM purchases p WHERE p.supplier_id=s.id) last FROM suppliers s")
+        args = []
+        if q:
+            sql += " WHERE s.name LIKE ? OR s.siren LIKE ? OR s.city LIKE ?"
+            args = [f"%{q}%"] * 3
+        rows = c.execute(sql + " ORDER BY s.name COLLATE NOCASE", args).fetchall()
+        orphans = c.execute("SELECT c.* FROM clients c WHERE NOT EXISTS (SELECT 1 FROM documents d WHERE "
+                            "d.client_id=c.id) ORDER BY c.name COLLATE NOCASE").fetchall()
+        return render_template("suppliers.html", suppliers=rows, q=q, orphans=orphans)
+    finally:
+        c.close()
+
+
+SUPPLIER_FIELDS = ["name", "siren", "vat_number", "address", "post_code", "city", "country", "email", "phone",
+                   "website", "notes"]
+
+
+@app.route("/fournisseurs/nouveau", methods=["GET", "POST"])
+@app.route("/fournisseurs/<int:sid>", methods=["GET", "POST"])
+def supplier_form(sid=None):
+    c = conn()
+    try:
+        if request.method == "POST":
+            vals = {k: (request.form.get(k) or "").strip() for k in SUPPLIER_FIELDS}
+            vals["country"] = (vals["country"] or "FR").upper()[:2]
+            if not vals["name"]:
+                raise logic.BusinessError("Le nom du fournisseur est obligatoire.")
+            if sid:
+                c.execute(f"UPDATE suppliers SET {', '.join(k + '=?' for k in vals)} WHERE id=?", (*vals.values(), sid))
+                c.execute("UPDATE purchases SET supplier=? WHERE supplier_id=?", (vals["name"], sid))
+            else:
+                sid = c.execute(f"INSERT INTO suppliers ({', '.join(vals)}) VALUES ({', '.join('?' for _ in vals)})",
+                                tuple(vals.values())).lastrowid
+            c.commit()
+            flash("Fournisseur enregistré.", "ok")
+            return redirect(url_for("supplier_form", sid=sid))
+        s = c.execute("SELECT * FROM suppliers WHERE id=?", (sid,)).fetchone() if sid else None
+        rows = c.execute("SELECT * FROM purchases WHERE supplier_id=? ORDER BY invoice_date DESC", (sid,)).fetchall() \
+            if sid else []
+        return render_template("supplier_form.html", s=s, purchases=rows)
+    finally:
+        c.close()
+
+
+@app.route("/fournisseurs/<int:sid>/supprimer", methods=["POST"])
+def supplier_delete(sid):
+    with db.transaction() as c:
+        if c.execute("SELECT 1 FROM purchases WHERE supplier_id=?", (sid,)).fetchone():
+            raise logic.BusinessError("Ce fournisseur a des dépenses : il ne peut pas être supprimé.")
+        c.execute("DELETE FROM recurring_purchases WHERE supplier_id=?", (sid,))
+        c.execute("DELETE FROM suppliers WHERE id=?", (sid,))
+    flash("Fournisseur supprimé.", "ok")
+    return redirect(url_for("suppliers"))
+
+
+@app.route("/achats-recurrents")
+def recurring():
+    c = conn()
+    try:
+        rows = c.execute("SELECT r.*, s.name AS supplier_name FROM recurring_purchases r LEFT JOIN suppliers s ON "
+                         "s.id=r.supplier_id ORDER BY r.active DESC, r.next_date").fetchall()
+        tot = {"ht": sum(r["total_ht"] / (r["every_months"] or 1) for r in rows if r["active"]),
+               "ttc": sum(r["total_ttc"] / (r["every_months"] or 1) for r in rows if r["active"])}
+        return render_template("recurring.html", rows=rows, tot=tot)
+    finally:
+        c.close()
+
+
+@app.route("/achats-recurrents/nouveau", methods=["GET", "POST"])
+@app.route("/achats-recurrents/<int:rid>", methods=["GET", "POST"])
+def recurring_form(rid=None):
+    c = conn()
+    try:
+        if request.method == "POST":
+            f = request.form
+            name = (f.get("supplier") or "").strip()
+            if not name or not (f.get("title") or "").strip():
+                raise logic.BusinessError("Fournisseur et libellé obligatoires.")
+            ht, tva = money(f.get("total_ht") or 0), money(f.get("total_tva") or 0)
+            ttc = money(f.get("total_ttc") or 0) or ht + tva
+            vals = {"supplier_id": logic.supplier_id_for(c, name), "title": f["title"].strip(), "total_ht": float(ht),
+                    "total_tva": float(tva), "total_ttc": float(ttc), "category": f.get("category") or "biens_services",
+                    "nature": f.get("nature") or "services", "method": f.get("method") or None,
+                    "every_months": int(f.get("every_months") or 1),
+                    "next_date": f.get("next_date") or date.today().isoformat(),
+                    "max_occurrences": int(f["max_occurrences"]) if (f.get("max_occurrences") or "").isdigit() else None,
+                    "auto_paid": 1 if f.get("auto_paid") else 0, "active": 1 if f.get("active") else 0}
+            if rid:
+                c.execute(f"UPDATE recurring_purchases SET {', '.join(k + '=?' for k in vals)} WHERE id=?",
+                          (*vals.values(), rid))
+            else:
+                c.execute(f"INSERT INTO recurring_purchases ({', '.join(vals)}) VALUES ({', '.join('?' for _ in vals)})",
+                          tuple(vals.values()))
+            n = logic.generate_recurring(c)
+            c.commit()
+            flash("Achat récurrent enregistré." + (f" {n} dépense(s) créée(s)." if n else ""), "ok")
+            return redirect(url_for("recurring"))
+        r = c.execute("SELECT r.*, s.name AS supplier_name FROM recurring_purchases r LEFT JOIN suppliers s ON "
+                      "s.id=r.supplier_id WHERE r.id=?", (rid,)).fetchone() if rid else None
+        sups = c.execute("SELECT name FROM suppliers ORDER BY name COLLATE NOCASE").fetchall()
+        return render_template("recurring_form.html", r=r, suppliers=sups)
+    finally:
+        c.close()
+
+
+@app.route("/achats-recurrents/<int:rid>/supprimer", methods=["POST"])
+def recurring_delete(rid):
+    with db.transaction() as c:
+        c.execute("DELETE FROM recurring_purchases WHERE id=?", (rid,))
+    flash("Achat récurrent supprimé (les dépenses déjà créées sont conservées).", "ok")
+    return redirect(url_for("recurring"))
+
+
+# -- déclarations ---------------------------------------------------------------
 
 @app.route("/tva")
 def tva():
@@ -515,14 +953,12 @@ def tva():
     try:
         res = calc.compute_period(c, period)
         decl = c.execute("SELECT * FROM declarations WHERE period=?", (period,)).fetchone()
-        start, end = calc.month_bounds(period)
         undated = c.execute("SELECT * FROM purchases WHERE deduction_date IS NULL ORDER BY invoice_date").fetchall()
         unpaid_reported = c.execute(
             "SELECT COUNT(*) n FROM payments WHERE pdp_reported=0 AND pdp_error IS NOT NULL").fetchone()["n"]
         history = c.execute("SELECT * FROM declarations ORDER BY period DESC LIMIT 12").fetchall()
         return render_template("tva.html", r=res, period=period, decl=decl, undated=undated,
-                               prev=calc.previous_of(period), next=calc.next_period(period),
-                               is_current=period == calc.previous_period(), history=history,
+                               prev=calc.previous_of(period), next=calc.next_period(period), history=history,
                                unpaid_reported=unpaid_reported)
     finally:
         c.close()
@@ -532,26 +968,83 @@ def tva():
 def tva_declare():
     period = request.form["period"]
     with db.transaction() as c:
-        res = calc.compute_period(c, period)
-        if request.form.get("undo"):
-            c.execute("DELETE FROM declarations WHERE period=?", (period,))
-        else:
-            c.execute("INSERT INTO declarations(period, declared_at, tva_nette, credit_reporte) VALUES (?, "
-                      "CURRENT_TIMESTAMP, ?, ?) ON CONFLICT(period) DO UPDATE SET declared_at=CURRENT_TIMESTAMP, "
-                      "tva_nette=excluded.tva_nette, credit_reporte=excluded.credit_reporte",
-                      (period, res["l28"], res["l27"]))
+        logic.mark_task(c, f"tva:{period}", not request.form.get("undo"))
     flash(f"TVA de {period_label(period)} marquée comme déclarée." if not request.form.get("undo")
           else "Déclaration annulée.", "ok")
     return redirect(url_for("tva", mois=period))
+
+
+@app.route("/urssaf")
+def urssaf():
+    c = conn()
+    try:
+        s = db.get_settings(c)
+        monthly = s.get("urssaf_period") == "mois"
+        if monthly:
+            period = request.args.get("p") or calc.previous_period()
+            start, end = calc.month_bounds(period)
+            prev, nxt = calc.previous_of(period), calc.next_period(period)
+            label = period_label(period)
+            e = date.fromisoformat(end)
+            due = (date(e.year + (e.month == 12), e.month % 12 + 1, 1) - timedelta(days=1)).isoformat()
+        else:
+            period = request.args.get("p") or calc.previous_quarter()
+            start, end = calc.quarter_bounds(period)
+            prev, nxt = calc.shift_quarter(period, -1), calc.shift_quarter(period, 1)
+            label = f"{period[-2:]} {period[:4]}"
+            due = (date.fromisoformat(end) + timedelta(days=30)).isoformat()
+        res = calc.compute_urssaf(c, start, end, s)
+        done = c.execute("SELECT done_at FROM tasks_done WHERE task=?", (f"urssaf:{period}",)).fetchone()
+        return render_template("urssaf.html", r=res, period=period, label=label, prev=prev, nxt=nxt, done=done,
+                               start=start, end=(date.fromisoformat(end) - timedelta(days=1)).isoformat(), due=due)
+    finally:
+        c.close()
+
+
+# -- export -------------------------------------------------------------------
+
+@app.route("/export")
+def export_page():
+    c = conn()
+    try:
+        years = [r["y"] for r in c.execute("SELECT DISTINCT substr(issue_date,1,4) y FROM documents WHERE "
+                                           "issue_date IS NOT NULL ORDER BY y DESC").fetchall() if r["y"]]
+        return render_template("export.html", years=years)
+    finally:
+        c.close()
+
+
+@app.route("/export/archives-<year>.zip")
+def export_zip(year):
+    c = conn()
+    try:
+        rows = c.execute("SELECT kind, number, pdf_path FROM documents WHERE substr(issue_date,1,4)=? AND "
+                         "status!='brouillon' AND pdf_path IS NOT NULL", (year,)).fetchall()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for r in rows:
+                if r["pdf_path"] and os.path.exists(r["pdf_path"]):
+                    z.write(r["pdf_path"], f"{KIND_LABEL[r['kind']]}s/{os.path.basename(r['pdf_path'])}")
+            for p in c.execute("SELECT file_path FROM purchases WHERE substr(invoice_date,1,4)=? AND file_path IS NOT "
+                               "NULL", (year,)).fetchall():
+                if os.path.exists(p["file_path"]):
+                    z.write(p["file_path"], f"Achats/{os.path.basename(p['file_path'])}")
+        buf.seek(0)
+        return send_file(buf, mimetype="application/zip", as_attachment=True, download_name=f"facturation-{year}.zip")
+    finally:
+        c.close()
 
 
 # -- réglages -----------------------------------------------------------------
 
 SETTINGS_FIELDS = ["company_name", "company_trade_name", "address", "post_code", "city", "siren", "siret",
                    "vat_number", "ape", "email", "phone", "iban", "bic", "rcs_rm", "insurance", "invoice_pattern",
-                   "avoir_pattern", "devis_pattern", "payment_days", "devis_validity_days", "default_vat_rate",
+                   "avoir_pattern", "devis_pattern", "devis_validity_days", "default_vat_rate",
                    "late_penalty", "recovery_fee", "discount_terms", "footer_note", "ca3_due_day", "pdp_client_id",
-                   "pdp_endpoint", "pdp_auto_send", "ereporting_start"]
+                   "pdp_endpoint", "ereporting_start", "default_nature", "default_payment_terms",
+                   "default_penalty_rate", "default_discount_rate", "urssaf_period", "urssaf_rate_vente",
+                   "urssaf_rate_bic", "urssaf_rate_bnc", "ir_rate_vente", "ir_rate_bic", "ir_rate_bnc", "cfp_rate"]
+CHECKBOXES = ["pdp_auto_send", "invoice_reset_yearly", "versement_liberatoire"]
 
 
 @app.route("/reglages", methods=["GET", "POST"])
@@ -560,20 +1053,38 @@ def settings_page():
     try:
         if request.method == "POST":
             f = request.form
-            vals = {k: (f.get(k) or "").strip() for k in SETTINGS_FIELDS}
-            vals["pdp_auto_send"] = "1" if f.get("pdp_auto_send") else "0"
-            vals["invoice_reset_yearly"] = "1" if f.get("invoice_reset_yearly") else "0"
-            vals["siret"] = vals["siret"].replace(" ", "")
-            vals["siren"] = (vals["siren"] or vals["siret"][:9]).replace(" ", "")
-            if vals["siren"] and not vals["vat_number"]:
-                vals["vat_number"] = logic.vat_number_from_siren(vals["siren"])
+            section = f.get("section", "")
+            vals = {k: (f.get(k) or "").strip() for k in SETTINGS_FIELDS if k in f}
+            for k in CHECKBOXES:
+                if f.get(f"has_{k}"):
+                    vals[k] = "1" if f.get(k) else "0"
+            if "siret" in vals:
+                vals["siret"] = vals["siret"].replace(" ", "")
+                vals["siren"] = (vals.get("siren") or vals["siret"][:9]).replace(" ", "")
+                if vals["siren"] and not vals.get("vat_number"):
+                    vals["vat_number"] = logic.vat_number_from_siren(vals["siren"])
             if f.get("pdp_client_secret"):
                 vals["pdp_client_secret"] = f["pdp_client_secret"].strip()
             counters = {k: f.get(k) for k in f if k.startswith(("invoice_next", "avoir_next", "devis_next")) and f.get(k)}
+            logo = request.files.get("logo")
+            if logo and logo.filename:
+                ext = os.path.splitext(logo.filename)[1].lower()
+                if ext not in (".png", ".jpg", ".jpeg"):
+                    raise logic.BusinessError("Logo : format PNG ou JPG uniquement.")
+                for old in ("logo.png", "logo.jpg", "logo.jpeg"):
+                    try:
+                        os.remove(os.path.join(db.DATA_DIR, old))
+                    except OSError:
+                        pass
+                path = os.path.join(db.DATA_DIR, f"logo{ext}")
+                logo.save(path)
+                vals["logo_path"] = path
+            if f.get("remove_logo"):
+                vals["logo_path"] = ""
             db.set_settings({**vals, **counters}, c)
             c.commit()
             flash("Réglages enregistrés.", "ok")
-            return redirect(url_for("settings_page"))
+            return redirect(url_for("settings_page", _anchor=section) if section else url_for("settings_page"))
         s = db.get_settings(c)
         year = date.today().year
         counters = {}
@@ -586,6 +1097,14 @@ def settings_page():
         c.close()
 
 
+@app.route("/reglages/logo")
+def settings_logo():
+    path = db.get_settings().get("logo_path")
+    if not path or not os.path.exists(path):
+        abort(404)
+    return send_file(path)
+
+
 @app.route("/reglages/tester", methods=["POST"])
 def settings_test():
     c = conn()
@@ -595,21 +1114,21 @@ def settings_test():
             c.commit()
             comp = out["company"]
             name = comp.get("formal_name") or comp.get("name") or "?"
-            msg = f"Connexion réussie : {name}."
+            env = " (bac à sable)" if comp.get("env") == "sandbox" else ""
+            msg = f"Connexion réussie : {name}{env}."
             if out.get("address"):
-                msg += f" Adresse de facturation électronique : {out['address'][1]} ({out['address'][0]})."
+                msg += f" Adresse de facturation électronique : {out['address'][1]}."
             flash(msg, "ok")
-        except (superpdp.PDPError, Exception) as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             flash(f"Échec de la connexion : {e}", "error")
     finally:
         c.close()
-    return redirect(url_for("settings_page"))
+    return redirect(url_for("settings_page", _anchor="pdp"))
 
 
 @app.route("/synchroniser", methods=["POST"])
 def sync_now():
-    msgs = run_sync()
-    for level, m in msgs:
+    for level, m in run_sync():
         flash(m, level)
     return redirect(request.referrer or url_for("index"))
 
@@ -643,160 +1162,7 @@ def import_monae_status():
     return jsonify(monae.get_job())
 
 
-@app.route("/api/debug/annuaire/<siren>")
-def api_debug_directory(siren):
-    c = conn()
-    try:
-        api = superpdp.Client("x", "x", db.get_settings(c).get("pdp_endpoint"))
-        out = {}
-        for name, fn in (("companies", api.lookup_company), ("entries", api.directory_entries)):
-            try:
-                out[name] = fn(siren)
-            except Exception as e:  # noqa: BLE001
-                out[name] = {"error": str(e)}
-        return jsonify(out)
-    finally:
-        c.close()
-
-
-@app.route("/api/debug/pdp")
-def api_debug_pdp():
-    c = conn()
-    try:
-        s = db.get_settings(c)
-        out = {"client_id_set": bool(s.get("pdp_client_id")), "secret_set": bool(s.get("pdp_client_secret")),
-               "endpoint": s.get("pdp_endpoint"), "siren": s.get("siren"),
-               "company_ok": bool(s.get("company_name") and s.get("siret"))}
-        if out["client_id_set"] and out["secret_set"]:
-            try:
-                res = logic.test_connection(c)
-                c.commit()
-                out["company"] = res.get("company")
-                out["address"] = res.get("address")
-                out["directory_error"] = res.get("directory_error")
-                try:
-                    out["session"] = logic.pdp_client(c).session()
-                except Exception as e:  # noqa: BLE001
-                    out["session_error"] = str(e)
-            except Exception as e:  # noqa: BLE001
-                out["error"] = str(e)
-        return jsonify(out)
-    finally:
-        c.close()
-
-
-@app.route("/api/debug/validation")
-def api_debug_validation():
-    """Construit une facture fictive (non enregistrée), la convertit en Factur-X et la fait valider."""
-    import tempfile
-    from pdf import build_pdf
-    c = conn()
-    try:
-        seller = logic.snapshot_seller(c)
-        client = {"kind": "pro", "name": "Client Test SARL", "siren": "552081317", "vat_number": "FR03552081317",
-                  "address": "22-30 avenue de Wagram", "post_code": "75008", "city": "Paris", "country": "FR"}
-        doc = {"id": 0, "kind": "facture", "number": "TEST-0001", "issue_date": date.today().isoformat(),
-               "due_date": (date.today() + timedelta(days=30)).isoformat(), "subject": "Facture de test",
-               "notes": None, "service_date": None}
-        lines = [{"designation": "Prestation de test", "description": "", "quantity": 2, "unit": "h",
-                  "unit_price": 60, "vat_rate": 20},
-                 {"designation": "Frais", "description": "", "quantity": 1, "unit": "u", "unit_price": 15.5,
-                  "vat_rate": 10}]
-        path = os.path.join(tempfile.gettempdir(), "test-facture.pdf")
-        build_pdf(doc, lines, seller, client, path)
-        en = superpdp.build_en_invoice(doc, lines, seller, client, {})
-        api = logic.pdp_client(c)
-        out = {"en_invoice": en}
-        try:
-            with open(path, "rb") as f:
-                fx = api.to_facturx(db.dumps(en), f.read())
-            out["facturx_bytes"] = len(fx)
-            out["validation"] = api.validate(fx)
-        except Exception as e:  # noqa: BLE001
-            out["error"] = str(e)
-        return jsonify(out)
-    finally:
-        c.close()
-
-
-@app.route("/api/debug/sandbox-e2e")
-def api_debug_sandbox_e2e():
-    """Envoi réel en bac à sable : facture fictive (non enregistrée) -> client de test -> statut Encaissée."""
-    import tempfile
-    from pdf import build_pdf
-    c = conn()
-    steps = []
-    try:
-        api = logic.pdp_client(c)
-        me = api.me()
-        if me.get("env") != "sandbox":
-            return jsonify({"error": "Refusé : identifiants de production. Ce test ne tourne qu'en bac à sable."}), 400
-        steps.append(f"Entreprise de test : {me.get('formal_name')} ({me.get('number')})")
-        tpl = api.convert_to_en(api.generate_test_invoice("cii"))
-        steps.append("Facture modèle du bac à sable récupérée")
-        seller = logic.snapshot_seller(c)
-        seller.update({"company_name": me.get("formal_name") or seller["company_name"],
-                       "address": me.get("address") or seller["address"], "post_code": me.get("postcode") or "",
-                       "city": me.get("city") or "", "siren": me.get("number"), "siret": "",
-                       "vat_number": (tpl.get("seller") or {}).get("vat_identifier") or ""})
-        b = tpl.get("buyer") or {}
-        pa = b.get("postal_address") or {}
-        client = {"kind": "pro", "name": b.get("name"), "address": pa.get("address_line1", ""),
-                  "post_code": pa.get("post_code", ""), "city": pa.get("city", ""),
-                  "country": pa.get("country_code", "FR"),
-                  "siren": (b.get("legal_registration_identifier") or {}).get("value", ""),
-                  "vat_number": b.get("vat_identifier") or ""}
-        num = f"TEST-{int(time.time())}"
-        doc = {"id": 0, "kind": "facture", "number": num, "issue_date": date.today().isoformat(),
-               "due_date": (date.today() + timedelta(days=30)).isoformat(), "subject": "Test bout en bout",
-               "notes": None, "service_date": None}
-        lines = [{"designation": "Prestation de test", "description": "", "quantity": 2, "unit": "h",
-                  "unit_price": 60, "vat_rate": 20},
-                 {"designation": "Frais", "description": "", "quantity": 1, "unit": "u", "unit_price": 15.5,
-                  "vat_rate": 10}]
-        en = superpdp.build_en_invoice(doc, lines, seller, client, {})
-        # identifiants du bac à sable (schémas spécifiques)
-        for k in ("electronic_address", "legal_registration_identifier", "identifiers"):
-            if (tpl.get("seller") or {}).get(k):
-                en["seller"][k] = tpl["seller"][k]
-            if b.get(k):
-                en["buyer"][k] = b[k]
-            elif k in en["buyer"]:
-                en["buyer"].pop(k)
-        path = os.path.join(tempfile.gettempdir(), "e2e.pdf")
-        build_pdf(doc, lines, seller, client, path)
-        with open(path, "rb") as f:
-            fx = api.to_facturx(db.dumps(en), f.read())
-        val = api.validate(fx)
-        ok = all(r.get("is_valid") for r in val.get("data", []))
-        steps.append(f"Factur-X générée et validée : {'valide' if ok else 'INVALIDE'}")
-        if not ok:
-            return jsonify({"steps": steps, "validation": val})
-        sent = api.send(fx, num)
-        steps.append(f"Facture {num} déposée (id {sent.get('id')}) pour {client['name']}")
-        events = []
-        for _ in range(15):
-            time.sleep(2)
-            events = (api.events(sent["id"]).get("data") or [])
-            if any(e.get("status_code") in ("fr:202", "fr:203", "fr:213", "fr:501") for e in events):
-                break
-        steps += [f"Statut : {superpdp.STATUS_LABELS.get(e['status_code'], e.get('status_text'))} ({e['status_code']})"
-                  for e in events]
-        from calc import vat_breakdown, totals
-        ttc = totals(lines)["ttc"]
-        api.post_event(superpdp.payment_event(sent["id"], date.today().isoformat(), ttc, vat_breakdown(lines)))
-        time.sleep(2)
-        last = (api.events(sent["id"]).get("data") or [])
-        if last:
-            e = last[-1]
-            steps.append(f"Après encaissement : {superpdp.STATUS_LABELS.get(e['status_code'], e.get('status_text'))} "
-                         f"({e['status_code']})")
-        return jsonify({"steps": steps, "events": last})
-    except Exception as e:  # noqa: BLE001
-        steps.append(f"ERREUR : {e}")
-        return jsonify({"steps": steps}), 500
-    finally:
-        c.close()
+debug_routes.register(app, conn)
 
 
 @app.route("/sante")
@@ -807,19 +1173,21 @@ def health():
 # -- utilitaires --------------------------------------------------------------
 
 def all_clients(c):
-    return c.execute("SELECT id, name, kind, email FROM clients ORDER BY name").fetchall()
+    return c.execute("SELECT id, name, kind, email FROM clients ORDER BY name COLLATE NOCASE").fetchall()
 
 
 def catalog(c):
     """Lignes déjà facturées, pour l'autocomplétion."""
-    return c.execute("SELECT designation, unit, unit_price, vat_rate, MAX(id) FROM lines GROUP BY designation "
-                     "ORDER BY MAX(id) DESC LIMIT 200").fetchall()
+    return c.execute("SELECT designation, unit, unit_price, vat_rate, nature, MAX(id) FROM lines "
+                     "WHERE COALESCE(kind,'item')='item' GROUP BY designation ORDER BY MAX(id) DESC LIMIT 300").fetchall()
 
 
 def run_sync():
     msgs = []
     c = conn()
     try:
+        logic.generate_recurring(c)
+        c.commit()
         if not logic.pdp_configured(c):
             return [("error", "Plateforme agréée non configurée (Réglages).")]
         try:
@@ -827,7 +1195,7 @@ def run_sync():
             n = logic.fetch_inbox(c)
             c.commit()
             msgs.append(("ok", f"Synchronisé. {n} nouvelle(s) facture(s) fournisseur." if n else "Synchronisé."))
-        except (superpdp.PDPError, Exception) as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             c.commit()
             msgs.append(("error", f"Synchronisation impossible : {e}"))
     finally:
@@ -848,7 +1216,7 @@ def main():
     db.init_db()
     threading.Thread(target=background_sync, daemon=True).start()
     from waitress import serve
-    serve(app, host="0.0.0.0", port=int(os.environ.get("FACTU_PORT", "8099")), threads=4)
+    serve(app, host="0.0.0.0", port=int(os.environ.get("FACTU_PORT", "8099")), threads=6)
 
 
 if __name__ == "__main__":

@@ -1,52 +1,151 @@
 {% extends "base.html" %}
+{% macro amt(o) -%}<span data-ht="{{ o.ht|money }}" data-ttc="{{ o.ttc|money }}">{{ o.ht|money }}</span>{%- endmacro %}
 {% block content %}
-<h1>Bonjour{% if settings.company_name %} {{ settings.company_name.split()[0] }}{% endif %}
+<div class="head">
+  <div><h1>Bonjour{% if settings.company_name %} {{ settings.company_name.split()[0] }}{% endif %}</h1>
+    <div class="sub">{{ today|date }} · {{ month_label|capitalize }}</div></div>
   <span class="spacer"></span>
-  <a class="btn" href="{{ url_for('doc_new', kind='devis') }}">+ Devis</a>
-  <a class="btn primary" href="{{ url_for('doc_new', kind='facture') }}">+ Facture</a>
-</h1>
-
-<div class="grid">
-  <div class="card stat"><div class="l">Encaissé en {{ month_label }} (TTC)</div><div class="v">{{ encaisse|money }}</div></div>
-  <div class="card stat"><div class="l">Facturé en {{ month_label }} (TTC)</div><div class="v">{{ factures_mois|money }}</div></div>
-  <div class="card stat"><div class="l">Reste à encaisser</div><div class="v">{{ reste|money }}</div>
-    {% if late %}<div class="small" style="color:var(--red)">{{ late|length }} facture{{ 's' if late|length > 1 }} en retard</div>{% endif %}</div>
-  <div class="card stat"><div class="l">Devis en attente</div><div class="v">{{ devis_open }}</div></div>
+  <div class="seg" data-mode><button data-m="ht" class="on">HT</button><button data-m="ttc">TTC</button></div>
+  <a class="btn" href="{{ url_for('doc_new', kind='devis') }}">Nouveau devis</a>
+  <a class="btn primary" href="{{ url_for('doc_new', kind='facture') }}">Nouvelle facture</a>
 </div>
 
+{% if tasks %}
+<div class="stack" style="display:grid; gap:8px; margin-bottom:18px">
+  {% for t in tasks %}{% include "_task.html" %}{% endfor %}
+</div>
+{% endif %}
 {% if pdp_errors %}
-<div class="flash error">{{ pdp_errors }} facture{{ 's' if pdp_errors > 1 }} n'{{ 'ont' if pdp_errors > 1 else 'a' }} pas pu être transmise{{ 's' if pdp_errors > 1 }} à la plateforme agréée. Ouvrez-la pour voir le détail.</div>
+<div class="flash error">{{ pdp_errors }} facture{{ 's' if pdp_errors > 1 }} non transmise{{ 's' if pdp_errors > 1 }} à la plateforme agréée.
+  <a href="{{ url_for('documents', kind='facture') }}">Voir</a></div>
 {% endif %}
 
-<div class="card">
-  <h2>À encaisser</h2>
-  {% if unpaid %}
-  <table>
-    <tr><th>Facture</th><th>Client</th><th>Échéance</th><th class="n">Reste dû</th><th></th></tr>
-    {% for u in unpaid %}
-    <tr class="click" onclick="location='{{ url_for('doc_view', doc_id=u.id) }}'">
-      <td>{{ u.number }}</td><td>{{ u.client_name }}</td>
-      <td>{{ u.due_date|date }}{% if u in late %} <span class="pill red">en retard</span>{% endif %}</td>
-      <td class="n">{{ (u.total_ttc - u.paid)|money }}</td>
-      <td class="n"><span class="pill {{ STATUS[u.status][1] }}">{{ STATUS[u.status][0] }}</span></td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% else %}<div class="empty">Tout est encaissé.</div>{% endif %}
+<div class="grid g3">
+  <div class="card kpi blue">
+    <div class="l">Encaissé · {{ month_label }}</div>
+    <div class="v">{{ amt(stats.mois.enc) }}</div>
+    <div class="s">Trimestre <b>{{ amt(stats.trimestre.enc) }}</b> · {{ year }} <b>{{ amt(stats.annee.enc) }}</b></div>
+  </div>
+  <div class="card kpi">
+    <div class="l">Facturé · {{ month_label }}</div>
+    <div class="v">{{ amt(stats.mois.fac) }}</div>
+    <div class="s">Trimestre <b>{{ amt(stats.trimestre.fac) }}</b> · {{ year }} <b>{{ amt(stats.annee.fac) }}</b></div>
+  </div>
+  <div class="card kpi amber">
+    <div class="l">Reste à encaisser</div>
+    <div class="v">{{ amt(rest) }}</div>
+    <div class="s">{{ unpaid|length }} facture{{ 's' if unpaid|length > 1 }}{% if late %} · <b style="color:var(--red)">{{ late|length }} en retard</b> ({{ amt(late_sum) }}){% endif %}</div>
+  </div>
 </div>
 
-<div class="card">
-  <h2>Derniers documents</h2>
-  {% if recent %}
-  <table>
-    {% for d in recent %}
-    <tr class="click" onclick="location='{{ url_for('doc_view', doc_id=d.id) }}'">
-      <td>{{ KIND_LABEL[d.kind] }} {{ d.number or '(brouillon)' }}</td><td>{{ d.client_name }}</td>
-      <td class="hide-m">{{ d.issue_date|date }}</td><td class="n">{{ d.total_ttc|money }}</td>
-      <td class="n"><span class="pill {{ STATUS[d.status][1] }}">{{ STATUS[d.status][0] }}</span></td>
-    </tr>
-    {% endfor %}
-  </table>
-  {% else %}<div class="empty">Aucun document pour l'instant. Commencez par <a href="{{ url_for('client_form') }}">ajouter un client</a>.</div>{% endif %}
+<div class="grid g21">
+  <div class="card">
+    <div class="row between" style="margin-bottom:8px">
+      <h2 style="margin:0">12 derniers mois</h2>
+      <div class="legend"><span><i style="background:var(--accent)"></i>Encaissé</span><span><i style="background:#c9dcf5"></i>Facturé</span></div>
+    </div>
+    <svg class="chart" id="chart" viewBox="0 0 720 220" preserveAspectRatio="none"></svg>
+  </div>
+  <div class="card">
+    <h2>{{ quarter_label }}</h2>
+    <div class="mini">
+      <span>Chiffre d'affaires encaissé</span><span class="v">{{ amt(stats.trimestre.enc) }}</span>
+      <span>Achats</span><span class="v">{{ amt(stats.trimestre.ach) }}</span>
+      <hr>
+      <span><b>Résultat</b></span><span class="v pos"><span data-ht="{{ (stats.trimestre.enc.ht - stats.trimestre.ach.ht)|money }}" data-ttc="{{ (stats.trimestre.enc.ttc - stats.trimestre.ach.ttc)|money }}">{{ (stats.trimestre.enc.ht - stats.trimestre.ach.ht)|money }}</span></span>
+    </div>
+    <h2 style="margin-top:22px">Année {{ year }}</h2>
+    <div class="mini">
+      <span>Facturé</span><span class="v">{{ amt(stats.annee.fac) }}</span>
+      <span>Encaissé</span><span class="v">{{ amt(stats.annee.enc) }}</span>
+      <span>Achats</span><span class="v">{{ amt(stats.annee.ach) }}</span>
+    </div>
+  </div>
 </div>
+
+<div class="card tight">
+  <div class="tabs" id="tabs">
+    <button class="on" data-t="t1">À encaisser<span class="count">{{ unpaid|length }}</span></button>
+    <button data-t="t2">Brouillons à finaliser<span class="count">{{ drafts|length }}</span></button>
+    <button data-t="t3">Devis en attente<span class="count">{{ devis|length }}</span></button>
+  </div>
+  <div id="t1">
+    {% if unpaid %}
+    <table class="list">
+      <tr><th>N°</th><th>Client · objet</th><th class="hide-m">Échéance</th><th class="n">Reste dû</th></tr>
+      {% for u in unpaid %}
+      <tr class="click {{ 'late' if u in late }}" data-href="{{ url_for('doc_view', doc_id=u.id) }}">
+        <td class="t">{{ u.number }}</td>
+        <td><div class="t">{{ u.client_name }}</div>{% if u.subject %}<div class="st">{{ u.subject }}</div>{% endif %}</td>
+        <td class="hide-m">{{ u.due_date|date }}{% if u in late %} <span class="pill red">en retard</span>{% endif %}</td>
+        <td class="n t"><span data-ht="{{ u.rest_ht|money }}" data-ttc="{{ u.rest_ttc|money }}">{{ u.rest_ht|money }}</span></td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}<div class="empty"><div class="big">🎉</div>Tout est encaissé.</div>{% endif %}
+  </div>
+  <div id="t2" hidden>
+    {% if drafts %}
+    <table class="list">
+      <tr><th>Date</th><th>Client · objet</th><th class="n">Total</th><th></th></tr>
+      {% for x in drafts %}
+      <tr class="click draft" data-href="{{ url_for('doc_edit', doc_id=x.id) }}">
+        <td>{{ x.issue_date|date }}</td>
+        <td><div class="t">{{ x.client_name }}</div><div class="st">{{ KIND_LABEL[x.kind] }}{% if x.subject %} · {{ x.subject }}{% endif %}</div></td>
+        <td class="n t"><span data-ht="{{ x.total_ht|money }}" data-ttc="{{ x.total_ttc|money }}">{{ x.total_ht|money }}</span></td>
+        <td class="n"><a class="btn small" href="{{ url_for('doc_edit', doc_id=x.id) }}">Reprendre</a></td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}<div class="empty">Aucun brouillon.</div>{% endif %}
+  </div>
+  <div id="t3" hidden>
+    {% if devis %}
+    <table class="list">
+      <tr><th>N°</th><th>Client · objet</th><th class="hide-m">Date</th><th class="n">Total</th></tr>
+      {% for x in devis %}
+      <tr class="click" data-href="{{ url_for('doc_view', doc_id=x.id) }}">
+        <td class="t">{{ x.number }}</td>
+        <td><div class="t">{{ x.client_name }}</div>{% if x.subject %}<div class="st">{{ x.subject }}</div>{% endif %}</td>
+        <td class="hide-m">{{ x.issue_date|date }}</td>
+        <td class="n t"><span data-ht="{{ x.total_ht|money }}" data-ttc="{{ x.total_ttc|money }}">{{ x.total_ht|money }}</span></td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}<div class="empty">Aucun devis en attente.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const DATA = {{ chart|tojson }};
+const fmt = v => Math.round(v).toLocaleString('fr-FR') + ' €';
+function draw(mode) {
+  const svg = document.getElementById('chart'), W = 720, H = 220, top = 14, bottom = 26, left = 6, right = 6;
+  const max = Math.max(1, ...DATA.map(p => Math.max(p.enc[mode], p.fac[mode])));
+  const step = Math.pow(10, Math.floor(Math.log10(max))), nice = Math.ceil(max / step) * step;
+  const bw = (W - left - right) / DATA.length, h = H - top - bottom;
+  let s = '';
+  for (let i = 0; i <= 4; i++) {
+    const y = top + h - h * i / 4;
+    s += `<line class="grid-line" x1="0" x2="${W}" y1="${y}" y2="${y}"/>`;
+  }
+  DATA.forEach((p, i) => {
+    const x = left + i * bw, w = bw * 0.32;
+    const hf = h * Math.max(0, p.fac[mode]) / nice, he = h * Math.max(0, p.enc[mode]) / nice;
+    s += `<rect class="bar-fac" x="${x + bw * 0.16}" y="${top + h - hf}" width="${w}" height="${hf}" rx="3"><title>${p.label} ${p.year} · facturé ${fmt(p.fac[mode])}</title></rect>`;
+    s += `<rect class="bar-enc" x="${x + bw * 0.16 + w + 2}" y="${top + h - he}" width="${w}" height="${he}" rx="3"><title>${p.label} ${p.year} · encaissé ${fmt(p.enc[mode])}</title></rect>`;
+    s += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${p.label}</text>`;
+  });
+  s += `<text x="${W - 4}" y="${top + 10}" text-anchor="end">${fmt(nice)}</text>`;
+  svg.innerHTML = s;
+}
+document.addEventListener('mode', e => draw(e.detail));
+let m0 = 'ht'; try { m0 = localStorage.getItem('factu-mode') || 'ht'; } catch (e) {}
+draw(m0);
+document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  ['t1', 't2', 't3'].forEach(id => document.getElementById(id).hidden = id !== b.dataset.t);
+}));
+</script>
 {% endblock %}

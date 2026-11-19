@@ -157,7 +157,83 @@ DEFAULT_SETTINGS = {
     "pdp_address_value": "",
     "ereporting_start": "2027-09-01",
     "last_inbox_id": "0",
+    # v2
+    "logo_path": "",
+    "default_nature": "bnc",
+    "default_payment_terms": "30-inv",
+    "default_penalty_rate": "",
+    "default_discount_rate": "",
+    "urssaf_period": "trimestre",
+    "urssaf_rate_vente": "12.3",
+    "urssaf_rate_bic": "21.2",
+    "urssaf_rate_bnc": "23.2",
+    "ir_rate_vente": "1.0",
+    "ir_rate_bic": "1.7",
+    "ir_rate_bnc": "2.2",
+    "versement_liberatoire": "1",
+    "cfp_rate": "0.2",
+    "dashboard_mode": "ht",
+    "schema_version": "1",
 }
+
+SCHEMA_V2 = """
+CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    siren TEXT,
+    vat_number TEXT,
+    address TEXT,
+    post_code TEXT,
+    city TEXT,
+    country TEXT NOT NULL DEFAULT 'FR',
+    email TEXT,
+    phone TEXT,
+    website TEXT,
+    notes TEXT,
+    monae_id INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS recurring_purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER REFERENCES suppliers(id),
+    title TEXT NOT NULL,
+    total_ht REAL DEFAULT 0,
+    total_tva REAL DEFAULT 0,
+    total_ttc REAL DEFAULT 0,
+    category TEXT NOT NULL DEFAULT 'biens_services',
+    nature TEXT DEFAULT 'services',
+    method TEXT,
+    every_months INTEGER NOT NULL DEFAULT 1,
+    next_date TEXT NOT NULL,
+    max_occurrences INTEGER,
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    auto_paid INTEGER NOT NULL DEFAULT 1,
+    active INTEGER NOT NULL DEFAULT 1,
+    monae_id INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS tasks_done (
+    task TEXT PRIMARY KEY,
+    done_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+MIGRATIONS = [
+    ("lines", "kind", "TEXT NOT NULL DEFAULT 'item'"),
+    ("lines", "nature", "TEXT"),
+    ("documents", "payment_terms", "TEXT"),
+    ("documents", "penalty_rate", "REAL"),
+    ("documents", "discount_rate", "REAL"),
+    ("documents", "monae_id", "INTEGER"),
+    ("documents", "cancelled_by_id", "INTEGER"),
+    ("purchases", "supplier_id", "INTEGER REFERENCES suppliers(id)"),
+    ("purchases", "nature", "TEXT DEFAULT 'services'"),
+    ("purchases", "method", "TEXT"),
+    ("purchases", "due_date", "TEXT"),
+    ("purchases", "monae_id", "INTEGER"),
+    ("purchases", "recurring_id", "INTEGER"),
+    ("purchases", "notes", "TEXT"),
+]
 
 
 def connect():
@@ -185,8 +261,16 @@ def transaction():
 def init_db():
     with transaction() as conn:
         conn.executescript(SCHEMA)
+        conn.executescript(SCHEMA_V2)
+        for table, col, decl in MIGRATIONS:
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if col not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         for k, v in DEFAULT_SETTINGS.items():
             conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_kind_date ON documents(kind, issue_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pay_date ON payments(date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lines_doc ON lines(document_id)")
 
 
 def get_settings(conn=None):

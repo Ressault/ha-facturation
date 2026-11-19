@@ -1,18 +1,24 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Clients <span class="spacer"></span><a class="btn primary" href="{{ url_for('client_form') }}">+ Client</a></h1>
-<div class="card">
+<div class="head"><h1>Clients</h1><span class="sub">{{ clients|length }}</span><span class="spacer"></span>
+  <a class="btn primary" href="{{ url_for('client_form') }}">＋ Client</a></div>
+{% if orphans %}
+<div class="note" style="margin-bottom:16px">{{ orphans }} contact{{ 's' if orphans > 1 }} sans aucune facture ni devis : si ce sont des fournisseurs importés par erreur,
+  <a href="{{ url_for('suppliers') }}#reclasser">déplacez-les dans les fournisseurs</a>.</div>
+{% endif %}
+<form method="get" class="card" style="padding:12px 16px"><div class="search"><input name="q" value="{{ q }}" placeholder="Rechercher un client (nom, SIREN, ville, e-mail)…" onchange="this.form.submit()"></div></form>
+<div class="card tight">
   {% if clients %}
-  <table>
-    <tr><th>Nom</th><th class="hide-m">SIREN</th><th class="hide-m">Ville</th><th class="n">Factures</th><th class="n">CA HT</th></tr>
+  <table class="list">
+    <tr><th>Client</th><th class="hide-m">SIREN</th><th class="hide-m">Ville</th><th class="n">Factures</th><th class="n">CA HT</th><th class="n hide-m">Dernier document</th></tr>
     {% for c in clients %}
-    <tr class="click" onclick="location='{{ url_for('client_form', client_id=c.id) }}'">
-      <td>{{ c.name }}{% if c.kind == 'particulier' %} <span class="pill">particulier</span>{% endif %}</td>
+    <tr class="click {{ 'dim' if not c.last_doc }}" data-href="{{ url_for('client_form', client_id=c.id) }}">
+      <td><div class="t">{{ c.name }}</div>{% if c.kind == 'particulier' %}<div class="st">Particulier</div>{% elif c.email %}<div class="st">{{ c.email }}</div>{% endif %}</td>
       <td class="hide-m">{{ c.siren or '' }}</td><td class="hide-m">{{ c.city or '' }}</td>
-      <td class="n">{{ c.n_fact }}</td><td class="n">{{ c.ca|money }}</td>
+      <td class="n">{{ c.n_fact }}</td><td class="n t">{{ c.ca|money }}</td><td class="n hide-m">{{ c.last_doc|date if c.last_doc else '—' }}</td>
     </tr>
     {% endfor %}
   </table>
-  {% else %}<div class="empty">Aucun client. <a href="{{ url_for('client_form') }}">Ajouter le premier</a> ou <a href="{{ url_for('import_page') }}">importer depuis MonAE</a>.</div>{% endif %}
+  {% else %}<div class="empty"><div class="big">👥</div>Aucun client.</div>{% endif %}
 </div>
 {% endblock %}

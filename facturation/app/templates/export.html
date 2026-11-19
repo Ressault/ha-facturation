@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="head"><h1>Export</h1></div>
+<div class="grid g3">
+  <div class="card"><h3>Liste des ventes</h3><p class="small muted">Factures et avoirs, au format CSV (Excel).</p>
+    <div class="actions">{% for y in years[:4] %}<a class="btn small" href="{{ url_for('documents_csv', kind='facture', periode='perso', du=y ~ '-01-01', au=y ~ '-12-31') }}">{{ y }}</a>{% endfor %}
+      <a class="btn small" href="{{ url_for('documents_csv', kind='facture') }}">Tout</a></div></div>
+  <div class="card"><h3>Liste des achats</h3><p class="small muted">Dépenses avec TVA, au format CSV.</p>
+    <div class="actions">{% for y in years[:4] %}<a class="btn small" href="{{ url_for('purchases_csv', periode='perso', du=y ~ '-01-01', au=y ~ '-12-31') }}">{{ y }}</a>{% endfor %}
+      <a class="btn small" href="{{ url_for('purchases_csv', periode='tout') }}">Tout</a></div></div>
+  <div class="card"><h3>Archives PDF</h3><p class="small muted">Toutes les factures, avoirs et devis d'une année dans un fichier ZIP (à conserver 10 ans).</p>
+    <div class="actions">{% for y in years %}<a class="btn small" href="{{ url_for('export_zip', year=y) }}">{{ y }}</a>{% endfor %}</div></div>
+</div>
+{% endblock %}

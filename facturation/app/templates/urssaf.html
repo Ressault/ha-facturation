@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="head">
+  <div class="docnav">
+    <a class="btn icon" href="{{ url_for('urssaf', p=prev) }}">‹</a>
+    <a class="btn icon" href="{{ url_for('urssaf', p=nxt) }}">›</a>
+  </div>
+  <div><h1>URSSAF · {{ label }}</h1><div class="sub">Recettes encaissées du {{ start|date }} au {{ end|date }} · à déclarer sur autoentrepreneur.urssaf.fr avant le {{ due|date }}</div></div>
+  <span class="spacer"></span>
+  {% if done %}<span class="pill green" style="font-size:13px">Déclaré</span>{% endif %}
+</div>
+<div class="note" style="margin-bottom:18px">Outil d'aide : il ne déclare rien à votre place. Vérifiez les montants avant de les reporter.</div>
+<div class="grid g2">
+  <div class="card tight">
+    <h2>Recettes à déclarer</h2>
+    <table class="list ca3">
+      <tr><td>Ventes de marchandises</td><td class="v"><span class="copy">{{ r.ca.vente }}</span> €</td></tr>
+      <tr><td>Prestations commerciales ou artisanales (BIC)</td><td class="v"><span class="copy">{{ r.ca.bic }}</span> €</td></tr>
+      <tr><td>Prestations non commerciales (BNC)</td><td class="v"><span class="copy">{{ r.ca.bnc }}</span> €</td></tr>
+      <tr class="dim"><td>Débours (non déclarés)</td><td class="v">{{ r.ca.debours }} €</td></tr>
+    </table>
+  </div>
+  <div class="card tight">
+    <h2>Montants à payer (estimation)</h2>
+    <table class="list">
+      <tr><th>Cotisations, contributions et impôts</th><th class="n">C.A.</th><th class="n">Taux</th><th class="n">Montant</th></tr>
+      {% for l in r.lines %}{% if l.base %}
+      <tr><td>{{ l.label }}</td><td class="n">{{ l.base|int_fr }} €</td><td class="n">{{ l.rate|rate }}</td><td class="n t">{{ l.amount|int_fr }} €</td></tr>
+      {% endif %}{% endfor %}
+      <tr><td><b>Total</b></td><td></td><td></td><td class="n"><b style="font-size:18px">{{ r.total|int_fr }} €</b></td></tr>
+    </table>
+  </div>
+</div>
+<form method="post" action="{{ url_for('task_toggle', task_id='urssaf:' ~ period) }}">
+  {% if done %}<input type="hidden" name="undo" value="1"><button class="small">Annuler « déclaré »</button>
+  {% else %}<button class="green">✓ J'ai déclaré ce chiffre d'affaires</button>{% endif %}
+</form>
+<p class="small muted" style="margin-top:14px">Taux modifiables dans <a href="{{ url_for('settings_page') }}#declarations">Réglages → TVA et URSSAF</a>. La nature (BNC, BIC, vente, débours) se choisit ligne par ligne sur les factures.</p>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.copy').forEach(el => el.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(el.textContent.trim()); } catch (e) {}
+  el.classList.add('done'); setTimeout(() => el.classList.remove('done'), 1200);
+}));
+</script>
+{% endblock %}

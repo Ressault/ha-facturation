@@ -1,39 +1,82 @@
+{%- set ep = request.endpoint or '' -%}
+{%- set kind_arg = request.args.get('kind', 'facture') -%}
 <!doctype html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Facturation{% endblock %}</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=3">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=20">
 </head>
 <body>
-<header class="top">
-  <a class="brand" href="{{ url_for('index') }}">Facturation</a>
-  <nav>
-    <a href="{{ url_for('index') }}" class="{{ 'on' if request.endpoint == 'index' }}">Accueil</a>
-    <a href="{{ url_for('documents', kind='devis') }}" class="{{ 'on' if request.args.get('kind') == 'devis' }}">Devis</a>
-    <a href="{{ url_for('documents', kind='facture') }}" class="{{ 'on' if request.endpoint == 'documents' and request.args.get('kind', 'facture') == 'facture' }}">Factures</a>
-    <a href="{{ url_for('clients') }}" class="{{ 'on' if request.endpoint in ('clients', 'client_form') }}">Clients</a>
-    <a href="{{ url_for('purchases') }}" class="{{ 'on' if request.endpoint in ('purchases', 'purchase_form') }}">Achats</a>
-    <a href="{{ url_for('tva') }}" class="{{ 'on' if request.endpoint == 'tva' }}">TVA</a>
-    <a href="{{ url_for('settings_page') }}" class="{{ 'on' if request.endpoint in ('settings_page', 'import_page') }}">Réglages</a>
+<header class="top"><div class="inner">
+  <div class="histnav">
+    <button type="button" onclick="history.back()" title="Page précédente" aria-label="Page précédente">‹</button>
+    <button type="button" onclick="history.forward()" title="Page suivante" aria-label="Page suivante">›</button>
+  </div>
+  <a class="brand" href="{{ url_for('index') }}"><span class="logo">€</span><span class="hide-m">Facturation</span></a>
+  <button type="button" class="burger icon" onclick="document.querySelector('.menu').classList.toggle('show')">☰</button>
+  <nav class="menu">
+    <div class="item {{ 'on' if ep == 'index' }}"><a href="{{ url_for('index') }}">Accueil</a></div>
+    <div class="item {{ 'on' if ep in ('documents','doc_view','doc_edit','doc_new','clients','client_form') }}">
+      <span>Ventes<span class="chev">▼</span></span>
+      <div class="drop">
+        <a href="{{ url_for('documents', kind='facture') }}">Factures</a>
+        <a href="{{ url_for('documents', kind='facture', statut='brouillons') }}">Brouillons <small>à finaliser</small></a>
+        <a href="{{ url_for('documents', kind='devis') }}">Devis</a>
+        <a href="{{ url_for('documents', kind='facture', statut='avoirs') }}">Avoirs</a>
+        <hr><a href="{{ url_for('clients') }}">Clients</a>
+      </div>
+    </div>
+    <div class="item {{ 'on' if ep in ('purchases','purchase_form','suppliers','supplier_form','recurring','recurring_form') }}">
+      <span>Achats<span class="chev">▼</span></span>
+      <div class="drop">
+        <a href="{{ url_for('purchases') }}">Dépenses</a>
+        <a href="{{ url_for('suppliers') }}">Fournisseurs</a>
+        <a href="{{ url_for('recurring') }}">Achats récurrents</a>
+      </div>
+    </div>
+    <div class="item {{ 'on' if ep in ('tva','urssaf') }}">
+      <span>Déclarations<span class="chev">▼</span></span>
+      <div class="drop">
+        <a href="{{ url_for('tva') }}">TVA <small>mensuelle</small></a>
+        <a href="{{ url_for('urssaf') }}">Chiffre d'affaires URSSAF <small>{{ 'mensuel' if settings.urssaf_period == 'mois' else 'trimestriel' }}</small></a>
+      </div>
+    </div>
+    <div class="item {{ 'on' if ep == 'export_page' }}"><a href="{{ url_for('export_page') }}">Export</a></div>
+    <div class="item {{ 'on' if ep in ('settings_page','import_page') }}">
+      <span>Réglages<span class="chev">▼</span></span>
+      <div class="drop">
+        <a href="{{ url_for('settings_page') }}#entreprise">Mon entreprise</a>
+        <a href="{{ url_for('settings_page') }}#documents">Factures et devis</a>
+        <a href="{{ url_for('settings_page') }}#declarations">TVA et URSSAF</a>
+        <a href="{{ url_for('settings_page') }}#pdp">Plateforme agréée</a>
+        <hr><a href="{{ url_for('import_page') }}">Import MonAE</a>
+      </div>
+    </div>
+    <div class="item plus"><span>＋ Nouveau</span>
+      <div class="drop">
+        <a href="{{ url_for('doc_new', kind='facture') }}">Facture</a>
+        <a href="{{ url_for('doc_new', kind='devis') }}">Devis</a>
+        <a href="{{ url_for('purchase_form') }}">Dépense</a>
+        <hr>
+        <a href="{{ url_for('client_form') }}">Client</a>
+        <a href="{{ url_for('supplier_form') }}">Fournisseur</a>
+      </div>
+    </div>
   </nav>
-</header>
+</div></header>
 
-{% if tva_banner %}
-<a class="banner {{ 'late' if tva_banner.late else '' }}" href="{{ url_for('tva', mois=tva_banner.period) }}">
-  <strong>TVA de {{ tva_banner.label }} à déclarer</strong>
-  {% if tva_banner.late %}— la date limite du {{ tva_banner.due|date }} est passée.
-  {% elif tva_banner.days == 0 %}— aujourd'hui, dernier jour.
-  {% else %}— avant le {{ tva_banner.due|date }} ({{ tva_banner.days }} jour{{ 's' if tva_banner.days > 1 }}).{% endif %}
-  <span class="go">Voir les montants →</span>
-</a>
-{% endif %}
-{% if setup_missing and request.endpoint != 'settings_page' %}
-<a class="banner info" href="{{ url_for('settings_page') }}"><strong>Première étape :</strong> renseignez votre entreprise (SIRET, TVA, adresse) dans les réglages. <span class="go">Réglages →</span></a>
+{% if tasks and ep != 'index' %}
+<div class="taskbar">
+  {% for t in tasks %}{% include "_task.html" %}{% endfor %}
+</div>
 {% endif %}
 
 <main>
+{% if setup_missing and ep not in ('settings_page', 'import_page') %}
+<a class="note" style="display:block; margin-bottom:16px" href="{{ url_for('settings_page') }}#entreprise"><strong>Première étape :</strong> renseignez votre entreprise (SIRET, TVA, adresse, logo). →</a>
+{% endif %}
 {% with msgs = get_flashed_messages(with_categories=true) %}
   {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
 {% endwith %}
@@ -43,6 +86,33 @@
 document.querySelectorAll('form[data-confirm]').forEach(f => f.addEventListener('submit', e => {
   if (!confirm(f.dataset.confirm)) e.preventDefault();
 }));
+document.querySelectorAll('.menu > .item > span').forEach(s => s.addEventListener('click', () => {
+  const it = s.parentElement, was = it.classList.contains('open');
+  document.querySelectorAll('.menu > .item.open').forEach(x => x.classList.remove('open'));
+  if (!was) it.classList.add('open');
+}));
+document.addEventListener('click', e => { if (!e.target.closest('.menu')) document.querySelectorAll('.menu > .item.open').forEach(x => x.classList.remove('open')); });
+document.querySelectorAll('tr[data-href]').forEach(tr => tr.addEventListener('click', e => {
+  if (e.target.closest('a,button,input,form,select')) return;
+  location = tr.dataset.href;
+}));
+document.querySelectorAll('form.task-check').forEach(f => f.addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = f.querySelector('.check'); btn.classList.add('done');
+  await fetch(f.action, {method: 'POST', headers: {'X-Requested-With': 'fetch'}, body: new FormData(f)});
+  const t = f.closest('.task'); t.classList.add('hide'); setTimeout(() => t.remove(), 300);
+}));
+// mode HT / TTC mémorisé
+const MODE_KEY = 'factu-mode';
+function setMode(m) {
+  try { localStorage.setItem(MODE_KEY, m); } catch (e) {}
+  document.querySelectorAll('[data-ht]').forEach(el => el.textContent = el.dataset[m]);
+  document.querySelectorAll('.seg[data-mode] button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
+  document.dispatchEvent(new CustomEvent('mode', {detail: m}));
+}
+document.querySelectorAll('.seg[data-mode] button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.m)));
+let initMode = 'ht'; try { initMode = localStorage.getItem(MODE_KEY) || 'ht'; } catch (e) {}
+if (document.querySelector('.seg[data-mode]')) setMode(initMode);
 </script>
 {% block scripts %}{% endblock %}
 </body>

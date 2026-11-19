@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="head"><h1>{{ s.name if s else 'Nouveau fournisseur' }}</h1><span class="spacer"></span>
+  {% if s %}<a class="btn primary" href="{{ url_for('purchase_form', fournisseur=s.name) }}">＋ Dépense</a>{% endif %}</div>
+<div class="grid g21">
+<div class="card" style="margin:0"><form method="post">
+  <div class="fields">
+    <div class="wide"><label>Nom</label><input name="name" required value="{{ s.name if s else '' }}"></div>
+    <div><label>SIREN</label><input name="siren" value="{{ s.siren if s and s.siren else '' }}"></div>
+    <div><label>N° TVA</label><input name="vat_number" value="{{ s.vat_number if s and s.vat_number else '' }}"></div>
+    <div class="wide"><label>Adresse</label><textarea name="address">{{ s.address if s and s.address else '' }}</textarea></div>
+    <div><label>Code postal</label><input name="post_code" value="{{ s.post_code if s and s.post_code else '' }}"></div>
+    <div><label>Ville</label><input name="city" value="{{ s.city if s and s.city else '' }}"></div>
+    <div><label>Pays</label><input name="country" maxlength="2" value="{{ s.country if s else 'FR' }}"></div>
+    <div><label>E-mail</label><input name="email" value="{{ s.email if s and s.email else '' }}"></div>
+    <div><label>Téléphone</label><input name="phone" value="{{ s.phone if s and s.phone else '' }}"></div>
+    <div><label>Site web</label><input name="website" value="{{ s.website if s and s.website else '' }}"></div>
+    <div class="wide"><label>Notes</label><textarea name="notes">{{ s.notes if s and s.notes else '' }}</textarea></div>
+  </div>
+  <button class="primary">Enregistrer</button></form>
+  {% if s and not purchases %}<form method="post" action="{{ url_for('supplier_delete', sid=s.id) }}" data-confirm="Supprimer ce fournisseur ?" style="margin-top:10px"><button class="danger small">Supprimer ce fournisseur</button></form>{% endif %}
+</div>
+<div class="card tight" style="margin:0">
+  <h2>Dépenses</h2>
+  {% if purchases %}
+  <table class="list">
+    {% for p in purchases[:50] %}
+    <tr class="click" data-href="{{ url_for('purchase_form', pid=p.id) }}"><td><div class="t">{{ p.description or '—' }}</div><div class="st">{{ p.invoice_date|date }}</div></td>
+      <td class="n t">{{ p.total_ttc|money }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty small">Aucune dépense.</div>{% endif %}
+</div>
+</div>
+{% endblock %}
