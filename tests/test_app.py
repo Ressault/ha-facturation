@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(APP))
 def env(monkeypatch):
     tmp = tempfile.mkdtemp()
     monkeypatch.setenv("FACTU_DATA_DIR", tmp)
-    for m in ["db", "calc", "logic", "superpdp", "pdf", "importer", "monae", "app"]:
+    for m in ["db", "calc", "logic", "superpdp", "pdf", "importer", "monae", "backup", "app"]:
         sys.modules.pop(m, None)
     import app as appmod
     import db
@@ -655,3 +655,35 @@ def test_v6_services_dash_delete(env):
     assert client.get(f"/achats-recurrents/{rec['id']}").status_code == 200
     assert client.get("/documents?periode=tout&client=%d" % cid).status_code == 200
     conn.close()
+
+
+def test_v7_backup_restore(env):
+    appmod, db, client = env
+    import zipfile, io, os
+    cid = make_client(client)
+    new_doc(client, "facture", cid, [{"designation": "Rendu", "quantity": 1, "unit_price": 100, "vat_rate": 20}], action="valider")
+    r = client.get("/export/sauvegarde-complete.zip")
+    assert r.status_code == 200
+    data = r.get_data()
+    z = zipfile.ZipFile(io.BytesIO(data))
+    names = z.namelist()
+    assert "facturation.db" in names and any(n.startswith("archives/") and n.endswith(".pdf") for n in names)
+    # on casse les données puis on restaure
+    conn = db.connect()
+    conn.execute("DELETE FROM lines"); conn.execute("DELETE FROM payments"); conn.execute("DELETE FROM documents"); conn.commit()
+    conn.close()
+    r = client.post("/export/restaurer", data={"confirm": "RESTAURER", "fichier": (io.BytesIO(data), "s.zip")},
+                    content_type="multipart/form-data")
+    assert r.status_code == 302
+    conn = db.connect()
+    assert conn.execute("SELECT COUNT(*) FROM documents WHERE kind='facture'").fetchone()[0] == 1
+    conn.close()
+    import backup
+    assert backup.list_snapshots() or os.listdir(os.path.join(db.DATA_DIR, "sauvegardes"))
+    r = client.post("/export/restaurer", data={"confirm": "non", "fichier": (io.BytesIO(data), "s.zip")},
+                    content_type="multipart/form-data")
+    assert r.status_code == 302
+    assert client.get("/export").status_code == 200
+    import pdf
+    f = pdf.legal_footer({"company_name": "A", "siret": "1", "vat_number": "FR1"})
+    assert f.split("\n")[1].startswith("TVA FR1")

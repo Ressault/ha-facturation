@@ -1,5 +1,5 @@
 name: Facturation
-version: "2.6.0"
+version: "2.7.0"
 slug: facturation
 description: Devis, factures, TVA mensuelle et facturation électronique (SUPER PDP) pour micro-entrepreneur
 url: https://github.com/Ressault/ha-facturation
@@ -15,4 +15,5 @@ panel_icon: mdi:receipt-text
 panel_title: Facturation
 panel_admin: false
 backup: hot
+backup_pre: python3 /app/backup.py snapshot
 watchdog: http://[HOST]:[PORT:8099]/sante

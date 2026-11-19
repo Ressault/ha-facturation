@@ -102,13 +102,14 @@ def legal_footer(s):
         parts.append(f"SIRET {s['siret']}")
     elif s.get("siren"):
         parts.append(f"SIREN {s['siren']}")
+    second = []
     if s.get("vat_number"):
-        parts.append(f"TVA {s['vat_number']}")
+        second.append(f"TVA {s['vat_number']}")
     if s.get("ape"):
-        parts.append(f"APE {s['ape']}")
+        second.append(f"APE {s['ape']}")
     if s.get("rcs_rm"):
-        parts.append(s["rcs_rm"])
-    text = " · ".join(parts)
+        second.append(s["rcs_rm"])
+    text = " · ".join(parts) + ("\n" + " · ".join(second) if second else "")
     if s.get("insurance"):
         text += "\n" + s["insurance"]
     if s.get("footer_note"):
@@ -199,9 +200,14 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
     for k in ("email", "phone"):
         if seller.get(k):
             info.append(seller[k])
+    y_phone = None
     for ln in [x for x in info if x]:
+        if seller.get("phone") and ln == seller["phone"]:
+            y_phone = pdf.get_y()
         pdf.cell(100, 4.3, ln, new_x="LMARGIN", new_y="NEXT")
     y_seller_end = pdf.get_y()
+    # le haut du bloc client s'aligne sur la ligne du téléphone (à défaut, sur la dernière ligne du bloc vendeur)
+    y_client = y_phone if y_phone is not None else max(16, y_seller_end - 4.3)
 
     refs = [("Date", fmt_date(doc.get("issue_date")))]
     if kind == "devis" and doc.get("validity_date"):
@@ -226,7 +232,7 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
         small.append(f"SIREN {client['siren']}")
     if client.get("vat_number"):
         small.append(f"TVA {client['vat_number']}")
-    y = 16
+    y = y_client
     box_h = 9 + 5 * len([c for c in cl if c]) + (4.5 if small else 0)
     pdf.set_fill_color(*LIGHT)
     pdf.rect(112, y, 82, box_h, style="F", round_corners=True, corner_radius=2.5)
@@ -252,44 +258,31 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
     pdf.line(16, y, 194, y)
     y += 4
     pdf.set_xy(16, y)
-    pdf.set_font("dejavu", "B", 12)
-    pdf.set_text_color(*GREY)
     word = TITLES[kind]
-    ww = pdf.get_string_width(word) + 2.5
-    pdf.cell(ww, 9, word)
-    pdf.set_font("dejavu", "B", 17)
+    num = f"n° {doc['number']}" if doc.get("number") else "— brouillon"
+    pdf.set_font("dejavu", "B", 13)
     pdf.set_text_color(*INK)
-    num = f"N° {doc['number']}" if doc.get("number") else "Brouillon"
-    numw = pdf.get_string_width(num) + 4
-    pdf.cell(numw, 9, num)
-    # dates en colonnes alignées à droite (libellé au-dessus, valeur en gras)
-    cols = []
+    ww = pdf.get_string_width(word) + 2.2
+    pdf.cell(ww, 7, word)
+    pdf.set_text_color(70, 70, 76)
+    pdf.cell(120, 7, num, new_x="LMARGIN", new_y="NEXT")
+    # dates juste en dessous : libellé gris, valeur en normal
+    y = pdf.get_y() + 1.5
+    x = 16
     for label, value in refs:
-        pdf.set_font("dejavu", "B", 8.8)
+        pdf.set_font("dejavu", "", 8.5)
+        lw = pdf.get_string_width(label + " ") + 0.5
         vw = pdf.get_string_width(str(value))
-        pdf.set_font("dejavu", "", 7.2)
-        cols.append((label, str(value), max(vw, pdf.get_string_width(label)) + 7))
-    total_w = sum(c[2] for c in cols)
-    if 194 - total_w < 16 + ww + numw + 6:  # pas la place à côté du numéro : dates sur la ligne suivante
-        y += 11
-        x = 16
-        cols = [(lb, v, w) for lb, v, w in cols]
-        first = True
-    else:
-        x = 194 - total_w
-        first = False
-    for label, value, cw in cols:
-        al = "L" if first else "R"
+        if x + lw + vw > 194:
+            x, y = 16, y + 5
         pdf.set_xy(x, y)
-        pdf.set_font("dejavu", "", 7.2)
         pdf.set_text_color(*GREY)
-        pdf.cell(cw, 4, label.upper(), align=al)
-        pdf.set_xy(x, y + 4.4)
-        pdf.set_font("dejavu", "B", 8.8)
+        pdf.cell(lw, 5, label)
         pdf.set_text_color(*INK)
-        pdf.cell(cw, 5, value, align=al)
-        x += cw
-    pdf.set_y(y + 13)
+        pdf.cell(vw, 5, str(value))
+        x += lw + vw + 7
+    y += 6
+    pdf.set_y(y + 2)
     if doc.get("subject"):
         pdf.set_font("dejavu", "B", 10.5)
         pdf.set_text_color(*INK)

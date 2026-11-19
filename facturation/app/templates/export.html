@@ -11,4 +11,25 @@
   <div class="card"><h3>Archives PDF</h3><p class="small muted">Toutes les factures, avoirs et devis d'une année dans un fichier ZIP (à conserver 10 ans).</p>
     <div class="actions">{% for y in years %}<a class="btn small" href="{{ url_for('export_zip', year=y) }}">{{ y }}</a>{% endfor %}</div></div>
 </div>
+
+<div class="card">
+  <div class="sec-h">Sauvegarde complète</div>
+  <div class="grid g2" style="margin:0">
+    <div>
+      <p class="small" style="margin-top:0">Un seul fichier ZIP avec <b>tout</b> : clients, factures, devis, avoirs, règlements, dépenses, réglages, prestations, et tous les PDF archivés. Gardez-en une copie sur votre PC ou sur Google Drive.</p>
+      <div class="actions"><a class="btn primary" href="{{ url_for('export_full') }}">Télécharger la sauvegarde complète</a>
+        <form method="post" action="{{ url_for('export_snapshot') }}"><button>Copier la base maintenant</button></form></div>
+      {% if snapshots %}<p class="tiny muted" style="margin:12px 0 4px">Copies automatiques de la base (chaque nuit, avant chaque sauvegarde Home Assistant et à chaque démarrage) :</p>
+      <div class="tiny muted">{% for sn in snapshots %}{{ sn.date.strftime('%d/%m/%Y %H:%M') }} · {{ (sn.size / 1024)|round|int }} Ko{{ '' if loop.last else ' — ' }}{% endfor %}</div>{% endif %}
+    </div>
+    <form method="post" action="{{ url_for('export_restore') }}" enctype="multipart/form-data"
+          data-confirm="Remplacer toutes les données actuelles par celles de la sauvegarde ? Une copie de l'état actuel est gardée avant.">
+      <label>Restaurer une sauvegarde (ZIP)</label>
+      <input type="file" name="fichier" accept=".zip" style="margin-bottom:8px">
+      <label>Tapez RESTAURER pour confirmer</label>
+      <div class="row" style="flex-wrap:nowrap; gap:8px"><input name="confirm" placeholder="RESTAURER"><button class="danger">Restaurer</button></div>
+      <p class="tiny muted">Remplace les données actuelles par celles du fichier. L'état actuel est copié avant, au cas où.</p>
+    </form>
+  </div>
+</div>
 {% endblock %}

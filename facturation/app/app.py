@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from flask import (Flask, abort, flash, jsonify, redirect, render_template, request, send_file,
                    url_for)
 
+import backup
 import calc
 import db
 import debug_routes
@@ -1320,9 +1321,40 @@ def export_page():
     try:
         years = [r["y"] for r in c.execute("SELECT DISTINCT substr(issue_date,1,4) y FROM documents WHERE "
                                            "issue_date IS NOT NULL ORDER BY y DESC").fetchall() if r["y"]]
-        return render_template("export.html", years=years)
+        return render_template("export.html", years=years, snapshots=backup.list_snapshots()[:7])
     finally:
         c.close()
+
+
+@app.route("/export/sauvegarde-complete.zip")
+def export_full():
+    path = backup.full_zip()
+    resp = send_file(path, mimetype="application/zip", as_attachment=True,
+                     download_name=f"facturation-sauvegarde-{date.today().isoformat()}.zip")
+    resp.call_on_close(lambda: os.path.exists(path) and os.remove(path))
+    return resp
+
+
+@app.route("/export/restaurer", methods=["POST"])
+def export_restore():
+    f = request.files.get("fichier")
+    if not f or not f.filename:
+        raise logic.BusinessError("Choisissez le fichier ZIP de sauvegarde.")
+    if request.form.get("confirm") != "RESTAURER":
+        raise logic.BusinessError("Tapez RESTAURER pour confirmer : les données actuelles seront remplacées.")
+    try:
+        safety = backup.restore_zip(f.stream)
+    except ValueError as e:
+        raise logic.BusinessError(str(e))
+    flash("Sauvegarde restaurée." + (f" L'état précédent est gardé dans {os.path.basename(safety)}." if safety else ""), "ok")
+    return redirect(url_for("index"))
+
+
+@app.route("/export/instantane", methods=["POST"])
+def export_snapshot():
+    p = backup.snapshot()
+    flash(f"Copie de la base enregistrée ({os.path.basename(p)})." if p else "Aucune base à copier.", "ok")
+    return redirect(url_for("export_page"))
 
 
 @app.route("/export/archives-<year>.zip")
@@ -1569,6 +1601,21 @@ def run_sync():
     return msgs
 
 
+def nightly_snapshot():
+    """Copie de la base chaque nuit vers 3 h 30, avant la sauvegarde automatique de Home Assistant (4 h)."""
+    from datetime import datetime
+    last = None
+    while True:
+        time.sleep(300)
+        now = datetime.now()
+        if now.hour == 3 and now.minute >= 30 and last != now.date():
+            try:
+                backup.snapshot()
+                last = now.date()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def background_sync():
     while True:
         time.sleep(1800)
@@ -1591,6 +1638,11 @@ def main():
     finally:
         c.close()
     threading.Thread(target=background_sync, daemon=True).start()
+    threading.Thread(target=nightly_snapshot, daemon=True).start()
+    try:
+        backup.snapshot()  # une copie à chaque démarrage (mise à jour, redémarrage du Raspberry)
+    except Exception:  # noqa: BLE001
+        pass
     from waitress import serve
     serve(app, host="0.0.0.0", port=int(os.environ.get("FACTU_PORT", "8099")), threads=6)
 
