@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Facturation{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=3">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="{{ url_for('index') }}">Facturation</a>
+  <nav>
+    <a href="{{ url_for('index') }}" class="{{ 'on' if request.endpoint == 'index' }}">Accueil</a>
+    <a href="{{ url_for('documents', kind='devis') }}" class="{{ 'on' if request.args.get('kind') == 'devis' }}">Devis</a>
+    <a href="{{ url_for('documents', kind='facture') }}" class="{{ 'on' if request.endpoint == 'documents' and request.args.get('kind', 'facture') == 'facture' }}">Factures</a>
+    <a href="{{ url_for('clients') }}" class="{{ 'on' if request.endpoint in ('clients', 'client_form') }}">Clients</a>
+    <a href="{{ url_for('purchases') }}" class="{{ 'on' if request.endpoint in ('purchases', 'purchase_form') }}">Achats</a>
+    <a href="{{ url_for('tva') }}" class="{{ 'on' if request.endpoint == 'tva' }}">TVA</a>
+    <a href="{{ url_for('settings_page') }}" class="{{ 'on' if request.endpoint in ('settings_page', 'import_page') }}">Réglages</a>
+  </nav>
+</header>
+
+{% if tva_banner %}
+<a class="banner {{ 'late' if tva_banner.late else '' }}" href="{{ url_for('tva', mois=tva_banner.period) }}">
+  <strong>TVA de {{ tva_banner.label }} à déclarer</strong>
+  {% if tva_banner.late %}— la date limite du {{ tva_banner.due|date }} est passée.
+  {% elif tva_banner.days == 0 %}— aujourd'hui, dernier jour.
+  {% else %}— avant le {{ tva_banner.due|date }} ({{ tva_banner.days }} jour{{ 's' if tva_banner.days > 1 }}).{% endif %}
+  <span class="go">Voir les montants →</span>
+</a>
+{% endif %}
+{% if setup_missing and request.endpoint != 'settings_page' %}
+<a class="banner info" href="{{ url_for('settings_page') }}"><strong>Première étape :</strong> renseignez votre entreprise (SIRET, TVA, adresse) dans les réglages. <span class="go">Réglages →</span></a>
+{% endif %}
+
+<main>
+{% with msgs = get_flashed_messages(with_categories=true) %}
+  {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+{% endwith %}
+{% block content %}{% endblock %}
+</main>
+<script>
+document.querySelectorAll('form[data-confirm]').forEach(f => f.addEventListener('submit', e => {
+  if (!confirm(f.dataset.confirm)) e.preventDefault();
+}));
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

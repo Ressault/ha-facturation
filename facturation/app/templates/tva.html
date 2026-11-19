@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>TVA de {{ period_label(period) }}
+  {% if decl and decl.declared_at %}<span class="pill green">déclarée</span>{% endif %}
+  <span class="spacer"></span>
+  <a class="btn small" href="{{ url_for('tva', mois=prev) }}">← {{ period_label(prev) }}</a>
+  <a class="btn small" href="{{ url_for('tva', mois=next) }}">{{ period_label(next) }} →</a>
+</h1>
+
+{% if undated %}
+<div class="flash error">{{ undated|length }} facture{{ 's' if undated|length > 1 }} fournisseur sans date de paiement : leur TVA n'est comptée nulle part.
+  <a href="{{ url_for('purchases') }}">Les marquer payées →</a></div>
+{% endif %}
+{% if unpaid_reported %}
+<div class="flash error">{{ unpaid_reported }} encaissement(s) n'ont pas pu être transmis à la plateforme agréée. Ils seront renvoyés à la prochaine synchronisation.</div>
+{% endif %}
+
+<div class="grid" style="grid-template-columns: 3fr 2fr">
+<div class="card">
+  <h2>À recopier sur impots.gouv.fr</h2>
+  <p class="small muted">Espace professionnel → Déclarer → TVA → période {{ period_label(period) }}. Montants en euros, sans centimes. Cliquez sur un montant pour le copier.</p>
+  <table class="ca3">
+    <tr><th colspan="2">Cadre A — Montant des opérations réalisées</th><th class="n">Montant</th></tr>
+    <tr><td class="code">A1</td><td>Ventes, prestations de services</td><td class="v"><span class="copy">{{ r.a1_base }}</span></td></tr>
+
+    <tr><th colspan="2">Cadre B — TVA brute</th><th class="n">Base HT / Taxe</th></tr>
+    {% for l in r.lines_brute %}
+    <tr><td class="code">{{ l.code }}</td><td>{{ l.label }}</td>
+      <td class="v"><span class="copy">{{ l.base_e }}</span><br><span class="copy">{{ l.tva_e }}</span></td></tr>
+    {% else %}
+    <tr><td class="code">08</td><td>Taux normal 20 %</td><td class="v">0<br>0</td></tr>
+    {% endfor %}
+    <tr class="total"><td class="code">16</td><td>Total de la TVA brute due</td><td class="v">{{ r.l16 }}</td></tr>
+
+    <tr><th colspan="3">TVA déductible</th></tr>
+    <tr><td class="code">19</td><td>Biens constituant des immobilisations</td><td class="v"><span class="copy">{{ r.l19 }}</span></td></tr>
+    <tr><td class="code">20</td><td>Autres biens et services</td><td class="v"><span class="copy">{{ r.l20 }}</span></td></tr>
+    {% if r.l22 %}<tr><td class="code">22</td><td>Report du crédit (déclaration précédente, ligne 27)</td><td class="v"><span class="copy">{{ r.l22 }}</span></td></tr>{% endif %}
+    <tr class="total"><td class="code">23</td><td>Total TVA déductible</td><td class="v">{{ r.l23 }}</td></tr>
+
+    {% if r.l28 > 0 or r.l25 == 0 %}
+    <tr class="total"><td class="code">28</td><td><strong>TVA nette due</strong> (= TD si pas d'accise)</td><td class="v">{{ r.l28 }} €</td></tr>
+    <tr class="total"><td class="code">32</td><td><strong>Total à payer</strong></td><td class="v">{{ r.l32 }} €</td></tr>
+    {% else %}
+    <tr class="total"><td class="code">25</td><td><strong>Crédit de TVA</strong></td><td class="v">{{ r.l25 }} €</td></tr>
+    <tr class="total"><td class="code">27</td><td>Crédit à reporter (sera ajouté le mois prochain, ligne 22)</td><td class="v">{{ r.l27 }} €</td></tr>
+    {% endif %}
+  </table>
+  {% if r.other_rates %}<p class="small muted">Opérations à d'autres taux (hors lignes ci-dessus) :
+    {% for o in r.other_rates %}{{ o.rate|rate }} sur {{ o.base|money }}{% if not loop.last %}, {% endif %}{% endfor %}. Les opérations non taxables sont à porter en ligne E2/F2 selon leur nature.</p>{% endif %}
+  {% if r.empty %}<p class="muted">Aucun encaissement ni achat ce mois-ci : vous déposez une déclaration « néant ».</p>{% endif %}
+
+  <form method="post" action="{{ url_for('tva_declare') }}" style="margin-top:14px" class="actions">
+    <input type="hidden" name="period" value="{{ period }}">
+    {% if decl and decl.declared_at %}
+      <span class="muted small">Marquée déclarée le {{ decl.declared_at[:10]|date }}.</span>
+      <button name="undo" value="1" class="small">Annuler</button>
+    {% else %}
+      <button class="primary">J'ai déclaré et payé cette TVA</button>
+    {% endif %}
+  </form>
+</div>
+
+<div>
+  <div class="card">
+    <h2>URSSAF</h2>
+    <p class="small muted">Chiffre d'affaires encaissé hors taxes à déclarer pour {{ period_label(period) }} (déclaration mensuelle) :</p>
+    <div class="stat"><div class="v"><span class="copy">{{ r.ca_urssaf|round(0)|int }}</span> €</div>
+      <div class="l">exact : {{ r.ca_urssaf|money }}</div></div>
+  </div>
+  <div class="card">
+    <h2>Encaissements du mois</h2>
+    {% for p in r.payments %}
+    <div class="small actions" style="justify-content:space-between"><span>{{ p.date|date }} · {{ 'Avoir' if p.kind == 'avoir' else 'Facture' }} {{ p.number }}</span><strong>{{ p.amount|money }}</strong></div>
+    {% else %}<div class="muted small">Aucun.</div>{% endfor %}
+    <p class="small muted" style="margin-top:8px">{{ r.n_purchases }} achat(s) avec TVA déduite ce mois-ci. TVA brute exacte : {{ r.tva_brute_exact|money }}.</p>
+  </div>
+  {% if history %}
+  <div class="card"><h2>Historique</h2>
+    {% for h in history %}<div class="small actions" style="justify-content:space-between"><a href="{{ url_for('tva', mois=h.period) }}">{{ period_label(h.period) }}</a><span>{{ (h.tva_nette or 0)|int }} € {% if h.credit_reporte %}· crédit {{ h.credit_reporte|int }} €{% endif %}</span></div>{% endfor %}
+  </div>{% endif %}
+</div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.copy').forEach(el => el.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(el.textContent.trim()); } catch (e) {
+    const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy');
+  }
+  el.classList.add('done'); setTimeout(() => el.classList.remove('done'), 1500);
+}));
+</script>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Clients <span class="spacer"></span><a class="btn primary" href="{{ url_for('client_form') }}">+ Client</a></h1>
+<div class="card">
+  {% if clients %}
+  <table>
+    <tr><th>Nom</th><th class="hide-m">SIREN</th><th class="hide-m">Ville</th><th class="n">Factures</th><th class="n">CA HT</th></tr>
+    {% for c in clients %}
+    <tr class="click" onclick="location='{{ url_for('client_form', client_id=c.id) }}'">
+      <td>{{ c.name }}{% if c.kind == 'particulier' %} <span class="pill">particulier</span>{% endif %}</td>
+      <td class="hide-m">{{ c.siren or '' }}</td><td class="hide-m">{{ c.city or '' }}</td>
+      <td class="n">{{ c.n_fact }}</td><td class="n">{{ c.ca|money }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">Aucun client. <a href="{{ url_for('client_form') }}">Ajouter le premier</a> ou <a href="{{ url_for('import_page') }}">importer depuis MonAE</a>.</div>{% endif %}
+</div>
+{% endblock %}

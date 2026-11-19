@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Achats <span class="muted small">— TVA déductible</span><span class="spacer"></span>
+  {% if pdp_on %}<form method="post" action="{{ url_for('sync_now') }}"><button>Relever les factures reçues</button></form>{% endif %}
+  <a class="btn primary" href="{{ url_for('purchase_form') }}">+ Achat</a></h1>
+<p class="muted small">Les factures de vos fournisseurs arrivent ici automatiquement via la plateforme agréée. Ajoutez à la main les autres (tickets, achats en ligne…). Marquez-les payées : la TVA est déduite sur le mois indiqué.</p>
+<div class="card">
+  {% if purchases %}
+  <table>
+    <tr><th>Fournisseur</th><th class="hide-m">Facture</th><th class="n">HT</th><th class="n">TVA</th><th>Déduite en</th><th></th></tr>
+    {% for p in purchases %}
+    <tr>
+      <td><a href="{{ url_for('purchase_form', pid=p.id) }}">{{ p.supplier }}</a>{% if p.source == 'pdp' %} <span class="pill blue">reçue</span>{% endif %}
+        <div class="small muted">{{ p.description or '' }}</div></td>
+      <td class="hide-m small">{{ p.invoice_number or '' }}<br>{{ p.invoice_date|date }}{% if p.file_path %} · <a href="{{ url_for('purchase_file', pid=p.id) }}" target="_blank">PDF</a>{% endif %}</td>
+      <td class="n">{{ p.total_ht|money }}</td><td class="n">{{ p.total_tva|money }}</td>
+      <td>{% if p.deduction_date %}{{ period_label(p.deduction_date[:7]) }}{% else %}
+        <form method="post" action="{{ url_for('purchase_paid', pid=p.id) }}" class="actions" style="flex-wrap:nowrap">
+          <input type="date" name="date" value="{{ today }}" style="width:140px"><button class="small primary">Payée</button></form>{% endif %}</td>
+      <td>{% if p.source == 'manuel' %}<form method="post" action="{{ url_for('purchase_delete', pid=p.id) }}" data-confirm="Supprimer cet achat ?"><button class="small danger">×</button></form>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">Aucun achat enregistré.</div>{% endif %}
+</div>
+{% endblock %}

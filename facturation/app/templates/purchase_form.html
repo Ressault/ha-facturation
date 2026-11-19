@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ 'Achat' if p else 'Nouvel achat' }}</h1>
+<form method="post" class="card">
+  <div class="form-grid">
+    <div class="wide"><label>Fournisseur *</label><input name="supplier" required value="{{ p.supplier if p else '' }}"></div>
+    <div><label>N° de facture</label><input name="invoice_number" value="{{ p.invoice_number if p else '' }}"></div>
+    <div><label>Date de la facture</label><input type="date" name="invoice_date" value="{{ p.invoice_date if p else today }}"></div>
+    <div class="wide"><label>Description</label><input name="description" value="{{ p.description if p else '' }}"></div>
+    <div><label>Montant HT</label><input name="total_ht" id="ht" inputmode="decimal" value="{{ p.total_ht if p else '' }}"></div>
+    <div><label>TVA</label><input name="total_tva" id="tva" inputmode="decimal" value="{{ p.total_tva if p else '' }}">
+      <div class="small"><a href="#" data-r="20">20 %</a> · <a href="#" data-r="10">10 %</a> · <a href="#" data-r="5.5">5,5 %</a></div></div>
+    <div><label>Montant TTC</label><input name="total_ttc" id="ttc" inputmode="decimal" value="{{ p.total_ttc if p else '' }}"></div>
+    <div><label>Nature</label><select name="category">
+      <option value="biens_services" {{ 'selected' if not p or p.category == 'biens_services' }}>Biens et services (ligne 20)</option>
+      <option value="immobilisation" {{ 'selected' if p and p.category == 'immobilisation' }}>Immobilisation — matériel durable (ligne 19)</option></select></div>
+    <div><label>Payée le</label><input type="date" name="paid_date" value="{{ p.paid_date if p and p.paid_date else '' }}"></div>
+    <div><label>TVA déduite le (mois)</label><input type="date" name="deduction_date" value="{{ p.deduction_date if p and p.deduction_date else '' }}">
+      <div class="small muted">Vide = date de paiement.</div></div>
+  </div>
+  <button class="primary">Enregistrer</button>
+  <a class="btn" href="{{ url_for('purchases') }}">Annuler</a>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+const n = v => parseFloat(String(v).replace(',', '.')) || 0, f = v => (Math.round(v * 100) / 100).toFixed(2).replace('.', ',');
+document.querySelectorAll('[data-r]').forEach(a => a.addEventListener('click', e => {
+  e.preventDefault(); const r = n(a.dataset.r), ht = document.getElementById('ht'), ttc = document.getElementById('ttc');
+  if (n(ht.value)) { const t = n(ht.value) * r / 100; document.getElementById('tva').value = f(t); ttc.value = f(n(ht.value) + t); }
+  else if (n(ttc.value)) { const h = n(ttc.value) / (1 + r / 100); ht.value = f(h); document.getElementById('tva').value = f(n(ttc.value) - h); }
+}));
+</script>
+{% endblock %}

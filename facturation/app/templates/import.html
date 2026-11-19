@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Importer l'historique</h1>
+{% if report %}
+<div class="card">
+  <h2>Résultat</h2>
+  {% for f in report.files %}<div class="small muted">{{ f }}</div>{% endfor %}
+  <p><strong>{{ report.clients }}</strong> client(s) et <strong>{{ report.invoices }}</strong> facture(s) importé(s){% if report.skipped %}, {{ report.skipped }} ligne(s) ignorée(s) (déjà présentes ou devis){% endif %}.</p>
+  {% if report.paid_without_date %}<p class="small">{{ report.paid_without_date }} facture(s) payée(s) sans date de paiement : la date de facture a été utilisée.</p>{% endif %}
+  {% if report.last_number %}<p>Dernier numéro importé : <strong>{{ report.last_number }}</strong>. Réglez le format et le prochain numéro dans <a href="{{ url_for('settings_page') }}">Réglages</a> pour continuer la suite.</p>{% endif %}
+  {% for e in report.errors %}<div class="flash error">{{ e }}</div>{% endfor %}
+  <a class="btn" href="{{ url_for('documents', kind='facture') }}">Voir les factures</a>
+</div>
+{% endif %}
+<form method="post" enctype="multipart/form-data" class="card">
+  <p>Dans MonAE, exportez la liste de vos <strong>clients</strong> et celle de vos <strong>factures</strong> au format CSV (ou Excel enregistré en CSV), puis déposez les fichiers ici. Les colonnes sont reconnues automatiquement.</p>
+  <input type="file" name="files" accept=".csv,.txt" multiple required>
+  <p class="small muted">Les factures importées servent d'historique : elles ne sont ni renvoyées à vos clients ni retransmises.</p>
+  <button class="primary">Importer</button>
+</form>
+{% endblock %}

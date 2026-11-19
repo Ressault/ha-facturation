@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{% if doc.id %}{{ KIND_LABEL[doc.kind] }} {{ doc.number or '(brouillon)' }}{% else %}{{ 'Nouveau devis' if doc.kind == 'devis' else 'Nouvelle facture' }}{% endif %}
+  {% if preview %}<span class="muted small">— sera n° {{ preview }}{% if doc.kind != 'devis' %} à l'émission{% endif %}</span>{% endif %}</h1>
+<form method="post" action="{{ url_for('doc_save') }}" id="docform">
+  <input type="hidden" name="id" value="{{ doc.id or '' }}">
+  <input type="hidden" name="kind" value="{{ doc.kind }}">
+  <input type="hidden" name="avoir_of_id" value="{{ doc.avoir_of_id or '' }}">
+  <input type="hidden" name="source_devis_id" value="{{ doc.source_devis_id or '' }}">
+  <div class="card">
+    <div class="form-grid">
+      <div class="wide"><label>Client *</label>
+        <div class="actions" style="flex-wrap:nowrap">
+        <select name="client_id" required>
+          <option value="">— choisir —</option>
+          {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if doc.client_id == c.id }}>{{ c.name }}{% if c.kind == 'particulier' %} (particulier){% endif %}</option>{% endfor %}
+        </select>
+        <a class="btn small" href="{{ url_for('client_form', next=doc.kind if doc.kind != 'avoir' else 'facture') }}">+ Nouveau</a></div></div>
+      <div><label>Date</label><input type="date" name="issue_date" value="{{ doc.issue_date or '' }}"></div>
+      {% if doc.kind == 'devis' %}
+      <div><label>Valable jusqu'au</label><input type="date" name="validity_date" value="{{ doc.validity_date or '' }}"></div>
+      {% elif doc.kind == 'facture' %}
+      <div><label>Échéance</label><input type="date" name="due_date" value="{{ doc.due_date or '' }}" placeholder="auto"></div>
+      {% endif %}
+      <div><label>Date ou période de prestation</label><input name="service_date" value="{{ doc.service_date or '' }}" placeholder="ex. novembre 2026"></div>
+      <div class="wide"><label>Objet</label><input name="subject" value="{{ doc.subject or '' }}" placeholder="ex. Modélisation 3D — projet Dupont"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Lignes</h2>
+    <datalist id="catalog">{% for c in catalog %}<option value="{{ c.designation }}">{% endfor %}</datalist>
+    <table class="lines" id="lines">
+      <tr><th>Désignation</th><th style="width:80px">Qté</th><th style="width:80px">Unité</th><th style="width:110px">PU HT</th><th style="width:80px">TVA %</th><th class="n" style="width:110px">Total HT</th><th style="width:30px"></th></tr>
+      {% for ln in lines %}
+      <tr class="line">
+        <td><input name="designation" list="catalog" value="{{ ln.designation }}" placeholder="Prestation">
+            <textarea name="description" class="desc" placeholder="Détail (facultatif)">{{ ln.description or '' }}</textarea></td>
+        <td><input name="quantity" inputmode="decimal" value="{{ ln.quantity|string|replace('.0', '') if ln.quantity is number else ln.quantity }}"></td>
+        <td><select name="unit">{% for u in ['u', 'h', 'jour', 'forfait', 'mois', 'km', 'm2'] %}<option {{ 'selected' if (ln.unit or 'u') == u }}>{{ u }}</option>{% endfor %}</select></td>
+        <td><input name="unit_price" inputmode="decimal" value="{{ ln.unit_price }}"></td>
+        <td><select name="vat_rate">{% for r in [20, 10, 5.5, 2.1, 0] %}<option value="{{ r }}" {{ 'selected' if ln.vat_rate|float == r }}>{{ r|string|replace('.', ',') }}</option>{% endfor %}</select></td>
+        <td class="n lt">0,00 €</td>
+        <td><button type="button" class="small danger del" title="Supprimer">×</button></td>
+      </tr>
+      {% endfor %}
+    </table>
+    <button type="button" id="add" class="small">+ Ligne</button>
+    <table class="totals">
+      <tr><td>Total HT</td><td class="n" id="tht">0,00 €</td></tr>
+      <tr><td>TVA</td><td class="n" id="ttva">0,00 €</td></tr>
+      <tr class="big"><td>Total TTC</td><td class="n" id="tttc">0,00 €</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <label>Note sur le document (facultatif)</label>
+    <textarea name="notes" placeholder="ex. Acompte de 30 % à la commande">{{ doc.notes or '' }}</textarea>
+  </div>
+
+  <div class="actions">
+    {% if doc.kind == 'devis' %}
+      <button class="primary" name="action" value="enregistrer">Enregistrer le devis</button>
+    {% else %}
+      <button name="action" value="enregistrer">Enregistrer le brouillon</button>
+      <button class="primary" name="action" value="valider" onclick="return confirm('Émettre définitivement ? Le numéro sera attribué et la facture ne pourra plus être modifiée{{ ' ; elle sera transmise au client via la plateforme agréée' if pdp_on and settings.pdp_auto_send == '1' }}.')">Émettre {{ "l'avoir" if doc.kind == 'avoir' else 'la facture' }}</button>
+    {% endif %}
+    <a class="btn" href="{{ url_for('doc_view', doc_id=doc.id) if doc.id else url_for('documents', kind=doc.kind) }}">Annuler</a>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+const catalog = {{ catalog|map('list')|list|tojson }};
+const fmt = v => v.toLocaleString('fr-FR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' €';
+const num = v => parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) || 0;
+const r2 = v => Math.round((v + Number.EPSILON) * 100) / 100;
+function recalc() {
+  let ht = 0; const vat = {};
+  document.querySelectorAll('#lines tr.line').forEach(tr => {
+    const q = num(tr.querySelector('[name=quantity]').value), p = num(tr.querySelector('[name=unit_price]').value);
+    const rate = num(tr.querySelector('[name=vat_rate]').value), t = r2(q * p);
+    tr.querySelector('.lt').textContent = fmt(t); ht += t; vat[rate] = (vat[rate] || 0) + t;
+  });
+  let tva = 0; for (const [r, b] of Object.entries(vat)) tva += r2(r2(b) * r / 100);
+  document.getElementById('tht').textContent = fmt(ht);
+  document.getElementById('ttva').textContent = fmt(tva);
+  document.getElementById('tttc').textContent = fmt(ht + tva);
+}
+function bind(tr) {
+  tr.querySelectorAll('input,select').forEach(i => i.addEventListener('input', recalc));
+  tr.querySelector('.del').addEventListener('click', () => {
+    if (document.querySelectorAll('#lines tr.line').length > 1) { tr.remove(); recalc(); }
+  });
+  const des = tr.querySelector('[name=designation]');
+  des.addEventListener('change', () => {
+    const hit = catalog.find(c => c[0] === des.value);
+    if (hit) {
+      const price = tr.querySelector('[name=unit_price]');
+      if (!price.value) price.value = String(hit[2]).replace('.', ',');
+      tr.querySelector('[name=unit]').value = hit[1] || 'u';
+      tr.querySelector('[name=vat_rate]').value = String(hit[3]);
+      recalc();
+    }
+  });
+}
+document.querySelectorAll('#lines tr.line').forEach(bind);
+document.getElementById('add').addEventListener('click', () => {
+  const rows = document.querySelectorAll('#lines tr.line');
+  const tr = rows[rows.length - 1].cloneNode(true);
+  tr.querySelectorAll('input,textarea').forEach(i => i.value = i.name === 'quantity' ? '1' : '');
+  document.getElementById('lines').appendChild(tr); bind(tr); recalc();
+  tr.querySelector('[name=designation]').focus();
+});
+recalc();
+</script>
+{% endblock %}

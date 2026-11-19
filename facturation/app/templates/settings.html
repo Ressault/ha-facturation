@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Réglages <span class="spacer"></span><a class="btn" href="{{ url_for('import_page') }}">Importer l'historique MonAE</a></h1>
+<form method="post">
+<div class="card">
+  <h2>Votre entreprise</h2>
+  <div class="form-grid">
+    <div class="wide"><label>Nom et prénom (la mention « EI » est ajoutée automatiquement)</label><input name="company_name" value="{{ s.company_name }}"></div>
+    <div class="wide"><label>Nom commercial (facultatif)</label><input name="company_trade_name" value="{{ s.company_trade_name }}"></div>
+    <div class="wide"><label>Adresse</label><textarea name="address">{{ s.address }}</textarea></div>
+    <div><label>Code postal</label><input name="post_code" value="{{ s.post_code }}"></div>
+    <div><label>Ville</label><input name="city" value="{{ s.city }}"></div>
+    <div><label>SIRET</label><input name="siret" value="{{ s.siret }}" inputmode="numeric"></div>
+    <div><label>SIREN</label><input name="siren" value="{{ s.siren }}" placeholder="déduit du SIRET"></div>
+    <div><label>N° TVA intracommunautaire</label><input name="vat_number" value="{{ s.vat_number }}" placeholder="calculé depuis le SIREN"></div>
+    <div><label>Code APE</label><input name="ape" value="{{ s.ape }}"></div>
+    <div><label>E-mail</label><input name="email" value="{{ s.email }}"></div>
+    <div><label>Téléphone</label><input name="phone" value="{{ s.phone }}"></div>
+    <div><label>IBAN</label><input name="iban" value="{{ s.iban }}"></div>
+    <div><label>BIC</label><input name="bic" value="{{ s.bic }}"></div>
+    <div class="wide"><label>Immatriculation</label><input name="rcs_rm" value="{{ s.rcs_rm }}" placeholder="ex. RCS Tours 123 456 789, ou « Dispensé d'immatriculation au RCS et au RM »"></div>
+    <div class="wide"><label>Assurance professionnelle (si obligatoire pour votre activité)</label><input name="insurance" value="{{ s.insurance }}"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Factures et devis</h2>
+  <div class="form-grid">
+    <div><label>Numérotation des factures</label><input name="invoice_pattern" value="{{ s.invoice_pattern }}"></div>
+    <div><label>Prochain n° de facture en {{ year }}</label><input name="{{ counters.invoice[0] }}" value="{{ counters.invoice[1] }}"></div>
+    <div><label>Numérotation des avoirs</label><input name="avoir_pattern" value="{{ s.avoir_pattern }}"></div>
+    <div><label>Prochain n° d'avoir</label><input name="{{ counters.avoir[0] }}" value="{{ counters.avoir[1] }}"></div>
+    <div><label>Numérotation des devis</label><input name="devis_pattern" value="{{ s.devis_pattern }}"></div>
+    <div><label>Prochain n° de devis</label><input name="{{ counters.devis[0] }}" value="{{ counters.devis[1] }}"></div>
+    <div class="wide small muted">{AAAA} = année, {NNNN} = numéro sur 4 chiffres (remis à 1 chaque année). Pour continuer la numérotation de MonAE, reprenez son format et indiquez le numéro suivant.</div>
+    <div><label>Délai de paiement (jours)</label><input name="payment_days" value="{{ s.payment_days }}"></div>
+    <div><label>Validité des devis (jours)</label><input name="devis_validity_days" value="{{ s.devis_validity_days }}"></div>
+    <div><label>Taux de TVA par défaut</label><input name="default_vat_rate" value="{{ s.default_vat_rate }}"></div>
+    <div class="wide"><label>Pénalités de retard</label><input name="late_penalty" value="{{ s.late_penalty }}"></div>
+    <div class="wide"><label>Indemnité de recouvrement</label><input name="recovery_fee" value="{{ s.recovery_fee }}"></div>
+    <div class="wide"><label>Escompte</label><input name="discount_terms" value="{{ s.discount_terms }}"></div>
+    <div class="wide"><label>Pied de page (facultatif)</label><input name="footer_note" value="{{ s.footer_note }}"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>TVA</h2>
+  <div class="form-grid">
+    <div><label>Jour limite de dépôt de la CA3</label><input name="ca3_due_day" value="{{ s.ca3_due_day }}">
+      <div class="small muted">Indiqué dans votre espace professionnel impots.gouv (entre le 15 et le 24).</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Plateforme agréée — SUPER PDP</h2>
+  <p class="small muted">Créez votre compte sur superpdp.tech, puis une application (menu Applications) : recopiez ici son identifiant et son secret.</p>
+  <div class="form-grid">
+    <div><label>Client ID</label><input name="pdp_client_id" value="{{ s.pdp_client_id }}" autocomplete="off"></div>
+    <div><label>Client secret {% if s.pdp_client_secret %}(enregistré){% endif %}</label><input name="pdp_client_secret" type="password" placeholder="{{ '••••••••' if s.pdp_client_secret else '' }}" autocomplete="new-password"></div>
+    <div><label>Adresse de l'API</label><input name="pdp_endpoint" value="{{ s.pdp_endpoint }}"></div>
+    <div><label>E-reporting des clients particuliers à partir du</label><input type="date" name="ereporting_start" value="{{ s.ereporting_start }}"></div>
+    <div class="wide"><label style="display:flex; gap:8px; align-items:center"><input type="checkbox" name="pdp_auto_send" value="1" style="width:auto" {{ 'checked' if s.pdp_auto_send == '1' }}> Transmettre automatiquement chaque facture à un professionnel dès son émission</label></div>
+    {% if s.pdp_address_value %}<div class="wide small muted">Votre adresse de facturation électronique : {{ s.pdp_address_value }} ({{ s.pdp_address_scheme }})</div>{% endif %}
+  </div>
+</div>
+<button class="primary">Enregistrer les réglages</button>
+</form>
+
+<div class="card" style="margin-top:16px">
+  <div class="actions">
+    <form method="post" action="{{ url_for('settings_test') }}"><button>Tester la connexion SUPER PDP</button></form>
+    <form method="post" action="{{ url_for('sync_now') }}"><button>Synchroniser maintenant</button></form>
+  </div>
+  <p class="small muted">La synchronisation (statuts des factures, factures reçues, encaissements) se fait aussi toute seule toutes les 30 minutes.</p>
+</div>
+
+{% if journal %}
+<details class="card"><summary>Journal</summary>
+  {% for j in journal %}<div class="small {{ 'muted' if j.level == 'info' }}" style="{{ 'color:var(--red)' if j.level == 'error' }}">{{ j.at }} — {{ j.message }}</div>{% endfor %}
+</details>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Bonjour{% if settings.company_name %} {{ settings.company_name.split()[0] }}{% endif %}
+  <span class="spacer"></span>
+  <a class="btn" href="{{ url_for('doc_new', kind='devis') }}">+ Devis</a>
+  <a class="btn primary" href="{{ url_for('doc_new', kind='facture') }}">+ Facture</a>
+</h1>
+
+<div class="grid">
+  <div class="card stat"><div class="l">Encaissé en {{ month_label }} (TTC)</div><div class="v">{{ encaisse|money }}</div></div>
+  <div class="card stat"><div class="l">Facturé en {{ month_label }} (TTC)</div><div class="v">{{ factures_mois|money }}</div></div>
+  <div class="card stat"><div class="l">Reste à encaisser</div><div class="v">{{ reste|money }}</div>
+    {% if late %}<div class="small" style="color:var(--red)">{{ late|length }} facture{{ 's' if late|length > 1 }} en retard</div>{% endif %}</div>
+  <div class="card stat"><div class="l">Devis en attente</div><div class="v">{{ devis_open }}</div></div>
+</div>
+
+{% if pdp_errors %}
+<div class="flash error">{{ pdp_errors }} facture{{ 's' if pdp_errors > 1 }} n'{{ 'ont' if pdp_errors > 1 else 'a' }} pas pu être transmise{{ 's' if pdp_errors > 1 }} à la plateforme agréée. Ouvrez-la pour voir le détail.</div>
+{% endif %}
+
+<div class="card">
+  <h2>À encaisser</h2>
+  {% if unpaid %}
+  <table>
+    <tr><th>Facture</th><th>Client</th><th>Échéance</th><th class="n">Reste dû</th><th></th></tr>
+    {% for u in unpaid %}
+    <tr class="click" onclick="location='{{ url_for('doc_view', doc_id=u.id) }}'">
+      <td>{{ u.number }}</td><td>{{ u.client_name }}</td>
+      <td>{{ u.due_date|date }}{% if u in late %} <span class="pill red">en retard</span>{% endif %}</td>
+      <td class="n">{{ (u.total_ttc - u.paid)|money }}</td>
+      <td class="n"><span class="pill {{ STATUS[u.status][1] }}">{{ STATUS[u.status][0] }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">Tout est encaissé.</div>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Derniers documents</h2>
+  {% if recent %}
+  <table>
+    {% for d in recent %}
+    <tr class="click" onclick="location='{{ url_for('doc_view', doc_id=d.id) }}'">
+      <td>{{ KIND_LABEL[d.kind] }} {{ d.number or '(brouillon)' }}</td><td>{{ d.client_name }}</td>
+      <td class="hide-m">{{ d.issue_date|date }}</td><td class="n">{{ d.total_ttc|money }}</td>
+      <td class="n"><span class="pill {{ STATUS[d.status][1] }}">{{ STATUS[d.status][0] }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">Aucun document pour l'instant. Commencez par <a href="{{ url_for('client_form') }}">ajouter un client</a>.</div>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ 'Devis' if kind == 'devis' else ('Avoirs' if kind == 'avoir' else 'Factures') }}
+  <span class="spacer"></span>
+  {% if kind != 'avoir' %}<a class="btn primary" href="{{ url_for('doc_new', kind=kind) }}">+ {{ 'Devis' if kind == 'devis' else 'Facture' }}</a>{% endif %}
+</h1>
+<div class="tabs">
+  {% if kind != 'devis' %}
+  <a href="{{ url_for('documents', kind='facture') }}" class="{{ 'on' if kind == 'facture' }}">Factures</a>
+  <a href="{{ url_for('documents', kind='avoir') }}" class="{{ 'on' if kind == 'avoir' }}">Avoirs</a>
+  <span style="width:12px"></span>
+  {% endif %}
+  <a href="{{ url_for('documents', kind=kind) }}" class="{{ 'on' if not year }}">Toutes</a>
+  {% for y in years %}<a href="{{ url_for('documents', kind=kind, annee=y) }}" class="{{ 'on' if year == y }}">{{ y }}</a>{% endfor %}
+</div>
+<div class="card">
+  {% if docs %}
+  <table>
+    <tr><th>N°</th><th>Client</th><th class="hide-m">Date</th><th class="n">Total TTC</th><th class="n hide-m">Plateforme</th><th class="n">Statut</th></tr>
+    {% for d in docs %}
+    <tr class="click" onclick="location='{{ url_for('doc_view', doc_id=d.id) }}'">
+      <td>{{ d.number or '(brouillon)' }}</td><td>{{ d.client_name }}</td><td class="hide-m">{{ d.issue_date|date }}</td>
+      <td class="n">{{ d.total_ttc|money }}</td>
+      <td class="n hide-m small muted">{% if d.pdp_error and not d.pdp_id %}<span class="pill red">erreur</span>{% elif d.pdp_status_text %}{{ d.pdp_status_text }}{% endif %}</td>
+      <td class="n"><span class="pill {{ STATUS[d.status][1] }}">{{ STATUS[d.status][0] }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">Rien ici pour l'instant.</div>{% endif %}
+</div>
+{% endblock %}
