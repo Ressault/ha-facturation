@@ -642,6 +642,32 @@ def api_debug_directory(siren):
         c.close()
 
 
+@app.route("/api/debug/pdp")
+def api_debug_pdp():
+    c = conn()
+    try:
+        s = db.get_settings(c)
+        out = {"client_id_set": bool(s.get("pdp_client_id")), "secret_set": bool(s.get("pdp_client_secret")),
+               "endpoint": s.get("pdp_endpoint"), "siren": s.get("siren"),
+               "company_ok": bool(s.get("company_name") and s.get("siret"))}
+        if out["client_id_set"] and out["secret_set"]:
+            try:
+                res = logic.test_connection(c)
+                c.commit()
+                out["company"] = res.get("company")
+                out["address"] = res.get("address")
+                out["directory_error"] = res.get("directory_error")
+                try:
+                    out["session"] = logic.pdp_client(c).session()
+                except Exception as e:  # noqa: BLE001
+                    out["session_error"] = str(e)
+            except Exception as e:  # noqa: BLE001
+                out["error"] = str(e)
+        return jsonify(out)
+    finally:
+        c.close()
+
+
 @app.route("/sante")
 def health():
     return jsonify({"ok": True})
