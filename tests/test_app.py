@@ -234,3 +234,14 @@ def test_numbering_patterns(env):
     assert logic.format_number("F-{AAAA}-{NNNN}", 2026, 7) == "F-2026-0007"
     assert logic.format_number("FA{AA}{NNN}", 2027, 12) == "FA27012"
     assert logic.vat_number_from_siren("732829320") == "FR44732829320"
+
+
+def test_pick_address(env):
+    import logic
+    res = {"data": [{"identifier": "0225:552081317", "is_active": False},
+                    {"identifier": "0225:552081317_A", "is_active": True},
+                    {"identifier": "0225:552081317_B", "is_active": True}]}
+    assert logic.pick_address(res, "552081317") is None
+    res["data"][0]["is_active"] = True
+    assert logic.pick_address(res, "552081317") == ("0225", "552081317")
+    assert logic.pick_address({"data": [{"identifier": "0225:123456789_X", "is_active": True}]}, "123456789") == ("0225", "123456789_X")

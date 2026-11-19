@@ -441,7 +441,7 @@ def test_connection(conn):
     if siren:
         try:
             out["directory"] = api.directory_entries(siren)
-            addr = pick_address(out["directory"])
+            addr = pick_address(out["directory"], siren)
             if addr:
                 db.set_settings({"pdp_address_scheme": addr[0], "pdp_address_value": addr[1]}, conn)
                 out["address"] = addr
@@ -450,22 +450,26 @@ def test_connection(conn):
     return out
 
 
-def pick_address(res):
-    """Extrait (scheme, value) d'une réponse d'annuaire, quel que soit son format exact."""
+def pick_address(res, siren=None):
+    """Choisit l'adresse de facturation électronique (scheme, value) dans l'annuaire.
+
+    Réponse de l'annuaire : {"data": [{"identifier": "0225:SIREN[_suffixe]", "is_active": bool, ...}]}.
+    Priorité : l'adresse SIREN « nue » si active, sinon l'unique adresse active.
+    """
     items = res.get("data") if isinstance(res, dict) else res
-    if isinstance(items, dict):
-        items = [items]
+    active = []
     for it in items or []:
-        if not isinstance(it, dict):
+        ident = it.get("identifier") if isinstance(it, dict) else None
+        if not ident or not it.get("is_active", True) or ":" not in ident:
             continue
-        for key in ("electronic_address", "address", "routing_address"):
-            v = it.get(key)
-            if isinstance(v, dict) and v.get("value"):
-                return v.get("scheme") or "0225", v["value"]
-            if isinstance(v, str) and v:
-                return it.get("scheme") or "0225", v
-        if it.get("identifier") and (it.get("scheme") or it.get("identifier_scheme")):
-            return it.get("scheme") or it.get("identifier_scheme"), it["identifier"]
+        scheme, value = ident.split(":", 1)
+        active.append((scheme, value))
+    if siren:
+        for scheme, value in active:
+            if value == siren:
+                return scheme, value
+    if len(active) == 1:
+        return active[0]
     return None
 
 
@@ -476,15 +480,14 @@ def lookup_siren(conn, siren):
     items = res.get("data") if isinstance(res, dict) else res
     if items:
         c = items[0]
-        addr = c.get("address") or c.get("postal_address") or {}
         out = {
             "name": c.get("formal_name") or c.get("name") or "",
-            "address": addr.get("address_line1") or addr.get("street") or "",
-            "post_code": addr.get("post_code") or addr.get("postal_code") or "",
-            "city": addr.get("city") or "",
+            "address": c.get("address") if isinstance(c.get("address"), str) else "",
+            "post_code": c.get("postcode") or c.get("post_code") or "",
+            "city": c.get("city") or "",
         }
     try:
-        a = pick_address(api.directory_entries(siren))
+        a = pick_address(api.directory_entries(siren), siren)
         if a:
             out["pdp_address_scheme"], out["pdp_address_value"] = a
     except superpdp.PDPError:
