@@ -253,16 +253,19 @@ def index():
             same_day = today.replace(year=y - 1, day=28)
         last_year = sums(c, f"{y - 1}-01-01", (same_day + timedelta(days=1)).isoformat())
         last_year_full = sums(c, f"{y - 1}-01-01", f"{y}-01-01")
-        cumul = {"cur": [], "prev": []}
-        acc = {"cur": {"ht": 0.0, "ttc": 0.0}, "prev": {"ht": 0.0, "ttc": 0.0}}
-        for m in range(1, 13):
-            for key, yy_ in (("cur", y), ("prev", y - 1)):
-                if key == "cur" and m > today.month:
-                    continue
+        # encaissements cumulés mois par mois, année en cours et 3 précédentes
+        series, years_cmp = [], []
+        for yy_ in range(y, y - 4, -1):
+            acc, pts = {"ht": 0.0, "ttc": 0.0}, []
+            for m in range(1, 13):
+                if yy_ == y and m > today.month:
+                    break
                 ms, me = calc.month_bounds(f"{yy_}-{m:02d}")
                 e_ = sums(c, ms, me)["enc"]
-                acc[key] = {"ht": acc[key]["ht"] + e_["ht"], "ttc": acc[key]["ttc"] + e_["ttc"]}
-                cumul[key].append(dict(acc[key]))
+                acc = {"ht": acc["ht"] + e_["ht"], "ttc": acc["ttc"] + e_["ttc"]}
+                pts.append(dict(acc))
+            series.append({"year": yy_, "pts": pts})
+            years_cmp.append({"year": yy_, "total": pts[-1] if pts else {"ht": 0, "ttc": 0}})
         ca_year = stats["annee"]["enc"]["ht"]
         plafond = {"limit": PLAFOND_MICRO_SERVICES, "ca": ca_year,
                    "pct": min(100, round(100 * ca_year / PLAFOND_MICRO_SERVICES, 1)) if ca_year > 0 else 0}
@@ -273,10 +276,48 @@ def index():
         return render_template("index.html", stats=stats, unpaid=unpaid, late=late, rest=rest, late_sum=late_sum,
                                drafts=drafts, devis=devis, chart=chart, month_label=period_label(month),
                                quarter_label=f"T{q[-1]} {q[:4]}", year=y, pdp_errors=errors, last_year=last_year,
-                               last_year_full=last_year_full, cumul=cumul,
+                               last_year_full=last_year_full, series=series, years_cmp=years_cmp,
+                               layout=dash_layout(c),
                                plafond=plafond, arrears=logic.urssaf_arrears(c), transfer=transfer)
     finally:
         c.close()
+
+
+DASH_DEFAULT = [("enc_mois", 3), ("enc_annee", 6), ("reste", 3), ("graphique", 8), ("trimestre", 4),
+                ("facture", 3), ("virement", 6), ("raccourcis", 3), ("listes", 12)]
+DASH_WIDTHS = (3, 4, 6, 8, 12)
+
+
+def dash_layout(c):
+    """Disposition des tuiles de l'accueil : ordre et largeur enregistrés, tuiles nouvelles ajoutées à la fin."""
+    import json
+    known = dict(DASH_DEFAULT)
+    try:
+        saved = json.loads(db.get_settings(c).get("dash_layout") or "[]")
+    except ValueError:
+        saved = []
+    out, seen = [], set()
+    for t in saved:
+        if isinstance(t, dict) and t.get("id") in known and t["id"] not in seen:
+            w = int(t.get("w") or known[t["id"]])
+            out.append({"id": t["id"], "w": w if w in DASH_WIDTHS else known[t["id"]]})
+            seen.add(t["id"])
+    out += [{"id": k, "w": w} for k, w in DASH_DEFAULT if k not in seen]
+    return out
+
+
+@app.route("/accueil/disposition", methods=["POST"])
+def dash_save():
+    import json
+    data = request.get_json(silent=True) or {}
+    items = data.get("tiles")
+    with db.transaction() as c:
+        if items is None or data.get("reset"):
+            db.set_settings({"dash_layout": ""}, c)
+        else:
+            db.set_settings({"dash_layout": json.dumps([{"id": str(t.get("id")), "w": int(t.get("w") or 3)}
+                                                        for t in items if isinstance(t, dict)])}, c)
+    return jsonify({"ok": True})
 
 
 @app.route("/taches/<path:task_id>", methods=["POST"])
@@ -559,6 +600,7 @@ def doc_new():
                  {"kind": "item", "designation": "", "description": "", "quantity": 1, "unit": "u", "unit_price": "",
                   "vat_rate": float(s.get("default_vat_rate") or 20), "nature": s.get("default_nature") or "bnc"}]
         return render_template("doc_form.html", doc=doc, lines=lines, clients=all_clients(c, doc.get("client_id")),
+                               services=services(c),
                                preview=logic.preview_number(c, kind, date.today().isoformat()))
     finally:
         c.close()
@@ -574,6 +616,7 @@ def doc_edit(doc_id):
                   "puis Dupliquer.", "error")
             return redirect(url_for("doc_view", doc_id=doc_id))
         return render_template("doc_form.html", doc=doc, lines=with_title(lines), clients=all_clients(c, doc["client_id"]),
+                               services=services(c),
                                preview=logic.preview_number(c, doc["kind"], doc["issue_date"] or date.today().isoformat())
                                if doc["status"] == "brouillon" else None)
     finally:
@@ -825,6 +868,10 @@ def doc_delete(doc_id):
         else:
             if doc["kind"] == "avoir" and doc["status"] != "brouillon":
                 raise logic.BusinessError("Un avoir finalisé ne peut pas être supprimé.")
+            # les factures issues de ce devis (ou un avoir brouillon) gardent leur existence propre
+            c.execute("UPDATE documents SET source_devis_id=NULL WHERE source_devis_id=?", (doc_id,))
+            c.execute("UPDATE documents SET avoir_of_id=NULL WHERE avoir_of_id=? AND status='brouillon'", (doc_id,))
+            c.execute("DELETE FROM lines WHERE document_id=?", (doc_id,))
             c.execute("DELETE FROM documents WHERE id=?", (doc_id,))
     if avoir:
         flash(f"Facture {doc['number']} supprimée : l'avoir {avoir['number']} a été créé automatiquement.", "ok")
@@ -1120,11 +1167,16 @@ def recurring_form(rid=None):
     try:
         if request.method == "POST":
             f = request.form
-            name = (f.get("supplier") or "").strip()
+            name = (f.get("supplier_new") or "").strip() or (f.get("supplier_pick") or "").strip() \
+                or (f.get("supplier") or "").strip()
             if not name or not (f.get("title") or "").strip():
                 raise logic.BusinessError("Fournisseur et libellé obligatoires.")
-            ht, tva = money(f.get("total_ht") or 0), money(f.get("total_tva") or 0)
-            ttc = money(f.get("total_ttc") or 0) or ht + tva
+            ttc, tva = money(f.get("total_ttc") or 0), money(f.get("total_tva") or 0)
+            if not ttc and f.get("total_ht"):
+                ttc = money(f.get("total_ht")) + tva
+            elif f.get("vat_rate") not in (None, "") and ttc:
+                tva = money(ttc - ttc / (1 + d(f["vat_rate"]) / 100))
+            ht = ttc - tva
             vals = {"supplier_id": logic.supplier_id_for(c, name), "title": f["title"].strip(), "total_ht": float(ht),
                     "total_tva": float(tva), "total_ttc": float(ttc), "category": f.get("category") or "biens_services",
                     "nature": f.get("nature") or "services", "method": f.get("method") or None,
@@ -1284,7 +1336,7 @@ def export_zip(year):
 # -- réglages -----------------------------------------------------------------
 
 SETTINGS_FIELDS = ["company_name", "company_trade_name", "address", "post_code", "city", "siren", "siret",
-                   "vat_number", "ape", "email", "phone", "iban", "bic", "rcs_rm", "insurance", "invoice_pattern",
+                   "vat_number", "ape", "email", "phone", "website", "iban", "bic", "rcs_rm", "insurance", "invoice_pattern",
                    "avoir_pattern", "devis_pattern", "devis_validity_days", "default_vat_rate",
                    "late_penalty", "recovery_fee", "discount_terms", "footer_note", "ca3_due_day", "pdp_client_id",
                    "pdp_endpoint", "ereporting_start", "default_nature", "default_payment_terms",
@@ -1429,6 +1481,51 @@ def all_clients(c, keep_id=None):
     """Clients proposés dans la liste déroulante (sans ceux retirés, sauf celui déjà choisi)."""
     return c.execute("SELECT id, name, kind, email FROM clients WHERE COALESCE(archived, 0) = 0 OR id = ? "
                      "ORDER BY name COLLATE NOCASE", (keep_id or 0,)).fetchall()
+
+
+def services(c):
+    return [dict(r) for r in c.execute("SELECT * FROM services ORDER BY position, id").fetchall()]
+
+
+@app.route("/prestations", methods=["GET", "POST"])
+def services_page():
+    c = conn()
+    try:
+        if request.method == "POST":
+            f = request.form
+            sid = f.get("id", type=int)
+            if f.get("delete") and sid:
+                c.execute("DELETE FROM services WHERE id=?", (sid,))
+                flash("Prestation supprimée.", "ok")
+            else:
+                name = (f.get("designation") or "").strip()
+                if not name:
+                    raise logic.BusinessError("Indiquez le nom de la prestation.")
+                vals = (name, (f.get("description") or "").strip(), f.get("unit") or "u",
+                        float(d(f.get("unit_price") or 0)), float(d(f.get("vat_rate") or 20)),
+                        f.get("nature") or db.get_settings(c).get("default_nature") or "bnc")
+                if sid:
+                    c.execute("UPDATE services SET designation=?, description=?, unit=?, unit_price=?, vat_rate=?, nature=? "
+                              "WHERE id=?", (*vals, sid))
+                else:
+                    pos = c.execute("SELECT COALESCE(MAX(position), 0) + 1 FROM services").fetchone()[0]
+                    c.execute("INSERT INTO services(designation, description, unit, unit_price, vat_rate, nature, position) "
+                              "VALUES (?, ?, ?, ?, ?, ?, ?)", (*vals, pos))
+                flash(f"Prestation « {name} » enregistrée.", "ok")
+            c.commit()
+            return redirect(url_for("services_page"))
+        return render_template("services.html", services=services(c), edit=request.args.get("id", type=int))
+    finally:
+        c.close()
+
+
+@app.route("/prestations/ordre", methods=["POST"])
+def services_order():
+    ids = (request.get_json(silent=True) or {}).get("ids") or []
+    with db.transaction() as c:
+        for i, sid in enumerate(ids):
+            c.execute("UPDATE services SET position=? WHERE id=?", (i, int(sid)))
+    return jsonify({"ok": True})
 
 
 def catalog(c):

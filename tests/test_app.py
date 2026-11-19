@@ -611,3 +611,47 @@ def test_v5_clients_options_preview(env):
     assert conn.execute("SELECT archived FROM clients WHERE id=?", (cid,)).fetchone()[0] == 0
     assert client.get("/").status_code == 200
     conn.close()
+
+
+def test_v6_services_dash_delete(env):
+    appmod, db, client = env
+    conn = db.connect()
+    names = [r["designation"] for r in conn.execute("SELECT designation FROM services ORDER BY position")]
+    assert names[:3] == ["Perspectives extérieures", "Perspectives intérieures", "Plan de masse"] and len(names) == 5
+    assert conn.execute("SELECT unit_price FROM services WHERE designation='Cyclorama'").fetchone()[0] == 500
+    ed = client.get("/documents/nouveau?kind=devis").get_data(as_text=True)
+    assert "Plan de masse" in ed and 'class="pick"' in ed
+    assert client.get("/prestations").status_code == 200
+    client.post("/prestations", data={"designation": "Animation", "unit_price": "900", "description": "- 30 s", "unit": "u", "vat_rate": "20"})
+    sid = conn.execute("SELECT id FROM services WHERE designation='Animation'").fetchone()[0]
+    client.post("/prestations", data={"id": sid, "delete": "1"})
+    assert not conn.execute("SELECT 1 FROM services WHERE id=?", (sid,)).fetchone()
+    # disposition de l'accueil
+    r = client.post("/accueil/disposition", json={"tiles": [{"id": "listes", "w": 12}, {"id": "enc_annee", "w": 8}]})
+    assert r.status_code == 200
+    lay = appmod.dash_layout(conn)
+    assert [t["id"] for t in lay][:2] == ["listes", "enc_annee"] and lay[1]["w"] == 8 and len(lay) == 9
+    html = client.get("/").get_data(as_text=True)
+    assert html.index('data-id="listes"') < html.index('data-id="enc_mois"') and "Réorganiser" in html
+    client.post("/accueil/disposition", json={"reset": True})
+    assert appmod.dash_layout(conn)[0]["id"] == "enc_mois"
+    # suppression d'un devis déjà transformé en facture
+    cid = make_client(client)
+    new_doc(client, "devis", cid, [{"designation": "Rendu", "quantity": 1, "unit_price": 100, "vat_rate": 20}])
+    dv = conn.execute("SELECT id FROM documents WHERE kind='devis'").fetchone()["id"]
+    client.post(f"/documents/{dv}/facturer")
+    r = client.post(f"/documents/{dv}/supprimer")
+    assert r.status_code == 302
+    assert not conn.execute("SELECT 1 FROM documents WHERE id=?", (dv,)).fetchone()
+    assert conn.execute("SELECT COUNT(*) FROM documents WHERE kind='facture'").fetchone()[0] == 1
+    # site internet en pied de page, formulaire d'achat récurrent
+    import pdf
+    assert "www.exemple.fr" in pdf.legal_footer({"company_name": "A", "website": "www.exemple.fr"})
+    assert pdf.group_iban("fr7630006000011234567890189") == "FR76 3000 6000 0112 3456 7890 189"
+    r = client.post("/achats-recurrents/nouveau", data={"supplier_new": "Spotify", "title": "abonnement", "total_ttc": "11,12",
+                                                        "vat_rate": "20", "every_months": "1", "next_date": "2099-01-23", "active": "1"})
+    rec = conn.execute("SELECT * FROM recurring_purchases WHERE title='abonnement'").fetchone()
+    assert rec["total_tva"] == 1.85 and rec["total_ht"] == 9.27
+    assert client.get(f"/achats-recurrents/{rec['id']}").status_code == 200
+    assert client.get("/documents?periode=tout&client=%d" % cid).status_code == 200
+    conn.close()

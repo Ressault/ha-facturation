@@ -11,9 +11,11 @@
 <form class="card" method="get">
   <input type="hidden" name="kind" value="{{ kind }}">
   <div class="filters">
-    <div><label>Société</label><select name="client" onchange="this.form.submit()">
-      <option value="">Toutes les sociétés</option>
-      {% for co in companies %}<option value="{{ co.id }}" {{ 'selected' if f.client == co.id|string }}>{{ co.name }}</option>{% endfor %}</select></div>
+    <div><label>Société</label><div class="combo-wrap">
+      {% set cur = companies|selectattr('id', 'equalto', (f.client|int if f.client else -1))|first %}
+      <input id="co-input" value="{{ cur.name if cur else '' }}" placeholder="Tapez quelques lettres…">
+      <input type="hidden" name="client" id="co-id" value="{{ f.client }}">
+      {% if cur %}<button type="button" class="clear" id="co-clear" title="Toutes">✕</button>{% endif %}</div></div>
     <div class="grow search"><label>Recherche</label><input name="q" value="{{ f.q }}" placeholder="Objet, numéro ou client…"></div>
     <div><label>Affichage</label><select name="statut" onchange="this.form.submit()">
       {% if is_devis %}
@@ -77,4 +79,16 @@
   </table>
   {% else %}<div class="empty"><div class="big">🗂</div>Aucun document pour ces critères.</div>{% endif %}
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const COS = {{ companies|map(attribute='name')|list|tojson }}, IDS = {{ companies|map(attribute='id')|list|tojson }};
+  const inp = document.getElementById('co-input'), hid = document.getElementById('co-id');
+  combo(inp, COS.map((n, i) => ({label: n, id: IDS[i]})), it => { inp.value = it.label; hid.value = it.id; inp.form.submit(); }, {showAll: true});
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !inp.value) { hid.value = ''; } });
+  inp.addEventListener('change', () => { if (!inp.value) { hid.value = ''; inp.form.submit(); } });
+  const clr = document.getElementById('co-clear'); if (clr) clr.addEventListener('click', () => { inp.value = ''; hid.value = ''; inp.form.submit(); });
+})();
+</script>
 {% endblock %}

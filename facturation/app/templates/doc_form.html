@@ -125,7 +125,26 @@ function recalc() {
   document.getElementById('tht').textContent = fmt(ht);
   document.getElementById('tttc').textContent = fmt(ht + tva);
 }
+const SERVICES = {{ (services or [])|tojson }};
+const fr = v => String(v).replace('.', ',');
+function bindService(tr) {
+  const lib = tr.querySelector('textarea.lib'); if (!lib || !SERVICES.length) return;
+  const items = SERVICES.map(s => ({label: s.designation, sub: s.description, right: fmt(s.unit_price), s}));
+  combo(lib, items, it => {
+    const s = it.s;
+    lib.value = s.designation;
+    tr.querySelector('[name=description]').value = s.description || '';
+    tr.querySelector('[name=unit_price]').value = fr(s.unit_price);
+    const unit = tr.querySelector('[name=unit]'); if ([...unit.options].some(o => o.value === s.unit)) unit.value = s.unit;
+    tr.querySelector('[name=vat_rate]').value = String(s.vat_rate).replace(/\.0$/, '');
+    const nat = tr.querySelector('[name=nature]'); if (nat && s.nature) nat.value = s.nature;
+    tr.querySelectorAll('textarea.auto').forEach(grow); recalc();
+    lib.focus(); lib.setSelectionRange(lib.value.length, lib.value.length);
+  }, {showAll: true});
+  tr.querySelector('.pick').addEventListener('click', () => { lib.focus(); lib.dispatchEvent(new Event('click')); });
+}
 function bind(tr) {
+  bindService(tr);
   tr.querySelectorAll('input,select,textarea').forEach(i => { i.setAttribute('autocomplete', 'off'); i.addEventListener('input', recalc); });
   tr.querySelectorAll('textarea.auto').forEach(t => { t.addEventListener('input', () => grow(t)); requestAnimationFrame(() => grow(t)); });
   const chk = tr.querySelector('.optchk');

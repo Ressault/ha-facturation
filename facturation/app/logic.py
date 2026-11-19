@@ -13,7 +13,7 @@ from pdf import build_pdf
 KIND_PATTERN_KEYS = {"facture": "invoice", "avoir": "avoir", "devis": "devis"}
 
 SELLER_KEYS = ["company_name", "company_trade_name", "address", "post_code", "city", "siren", "siret",
-               "vat_number", "ape", "email", "phone", "iban", "bic", "rcs_rm", "insurance",
+               "vat_number", "ape", "email", "phone", "website", "iban", "bic", "rcs_rm", "insurance",
                "late_penalty", "recovery_fee", "discount_terms", "footer_note", "logo_path",
                "default_penalty_rate", "default_discount_rate",
                "pdp_address_scheme", "pdp_address_value"]

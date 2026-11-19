@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% macro form(sv) %}
+<form method="post" class="fgrid" style="margin:0">
+  <input type="hidden" name="id" value="{{ sv.id if sv else '' }}">
+  <div class="w2"><label>Prestation</label><input name="designation" required value="{{ sv.designation if sv else '' }}" placeholder="ex. Perspectives extérieures"></div>
+  <div><label>Prix unitaire HT</label><input name="unit_price" inputmode="decimal" value="{{ sv.unit_price|qty if sv else '' }}" placeholder="0,00" style="text-align:right"></div>
+  <div class="row" style="gap:6px; flex-wrap:nowrap">
+    <div style="flex:1"><label>Unité</label><select name="unit">{% for u in ['u', 'h', 'jour', 'forfait', 'image'] %}<option {{ 'selected' if (sv.unit if sv else 'u') == u }}>{{ u }}</option>{% endfor %}</select></div>
+    <div style="flex:1"><label>TVA</label><select name="vat_rate">{% for r in [20, 10, 5.5, 2.1, 0] %}<option value="{{ r }}" {{ 'selected' if (sv.vat_rate if sv else 20)|float == r }}>{{ r|string|replace('.', ',') }} %</option>{% endfor %}</select></div>
+  </div>
+  <div class="w3"><label>Détail (repris dans la ligne de la facture ou du devis)</label><textarea name="description" class="auto" rows="3">{{ sv.description if sv else '' }}</textarea></div>
+  <div><label>Nature</label><select name="nature">{% for v, l in NATURES.items() %}<option value="{{ v }}" {{ 'selected' if (sv.nature if sv and sv.nature else settings.default_nature) == v }}>{{ {'bnc': 'BNC', 'bic': 'BIC presta.', 'vente': 'Vente', 'debours': 'Débours'}[v] }}</option>{% endfor %}</select></div>
+  <div class="w4 formbar" style="margin-top:0; padding-top:10px">
+    {% if sv %}<button name="delete" value="1" class="danger left" formnovalidate onclick="return confirm('Supprimer cette prestation ? Les factures déjà faites ne changent pas.')">Supprimer</button>
+    <a class="btn" href="{{ url_for('services_page') }}">Annuler</a>{% endif %}
+    <button class="primary">{{ 'Enregistrer' if sv else '＋ Ajouter la prestation' }}</button>
+  </div>
+</form>
+{% endmacro %}
+{% block content %}
+<div class="head"><h1>Prestations</h1><span class="sub">{{ services|length }}</span><span class="spacer"></span></div>
+<p class="small muted" style="margin-top:-8px">Choisissez-les avec ▼ dans le libellé d'une ligne de facture ou de devis : le détail et le prix se remplissent, et vous pouvez tout modifier au clavier.</p>
+<div class="card tight">
+  {% if services %}
+  <table class="list">
+    <tr><th>Prestation</th><th class="hide-m">Détail</th><th class="n">Prix HT</th><th class="n hide-m">TVA</th><th></th></tr>
+    {% for sv in services %}
+    {% if edit == sv.id %}
+    <tr><td colspan="5" style="padding:14px 18px; background:var(--hover)">{{ form(sv) }}</td></tr>
+    {% else %}
+    <tr class="click" data-href="{{ url_for('services_page', id=sv.id) }}">
+      <td class="t">{{ sv.designation }}</td>
+      <td class="hide-m small muted" style="white-space:pre-line; max-width:520px">{{ sv.description }}</td>
+      <td class="n t">{{ sv.unit_price|money }}{% if sv.unit and sv.unit != 'u' %} <span class="muted small">/ {{ sv.unit }}</span>{% endif %}</td>
+      <td class="n hide-m">{{ sv.vat_rate|rate }}</td>
+      <td class="n"><a class="btn small" href="{{ url_for('services_page', id=sv.id) }}">Modifier</a></td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+  {% else %}<div class="empty">Aucune prestation enregistrée.</div>{% endif %}
+</div>
+<div class="card">
+  <div class="sec-h">Nouvelle prestation</div>
+  {{ form(none) }}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('textarea.auto').forEach(t => { const g = () => { t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; }; t.addEventListener('input', g); g(); });
+</script>
+{% endblock %}

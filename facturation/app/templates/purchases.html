@@ -7,9 +7,11 @@
 
 <form class="card" method="get">
   <div class="filters">
-    <div><label>Fournisseur</label><select name="fournisseur" onchange="this.form.submit()">
-      <option value="">Tous les fournisseurs</option>
-      {% for co in companies %}<option value="{{ co.id }}" {{ 'selected' if f.fournisseur == co.id|string }}>{{ co.name }}</option>{% endfor %}</select></div>
+    <div><label>Fournisseur</label><div class="combo-wrap">
+      {% set cur = companies|selectattr('id', 'equalto', (f.fournisseur|int if f.fournisseur else -1))|first %}
+      <input id="co-input" value="{{ cur.name if cur else '' }}" placeholder="Tapez quelques lettres…">
+      <input type="hidden" name="fournisseur" id="co-id" value="{{ f.fournisseur }}">
+      {% if cur %}<button type="button" class="clear" id="co-clear" title="Toutes">✕</button>{% endif %}</div></div>
     <div class="grow search"><label>Recherche</label><input name="q" value="{{ f.q }}" placeholder="Libellé, réf. facture ou de paiement…"></div>
     <div><label>Affichage</label><select name="statut" onchange="this.form.submit()">
       {% for v, l in [('', 'Tout'), ('non_payees', 'Non payées'), ('payees', 'Payées'), ('sans_deduction', 'TVA non déduite')] %}
@@ -54,4 +56,16 @@
   </table>
   {% else %}<div class="empty"><div class="big">🧾</div>Aucune dépense sur cette période.</div>{% endif %}
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const COS = {{ companies|map(attribute='name')|list|tojson }}, IDS = {{ companies|map(attribute='id')|list|tojson }};
+  const inp = document.getElementById('co-input'), hid = document.getElementById('co-id');
+  combo(inp, COS.map((n, i) => ({label: n, id: IDS[i]})), it => { inp.value = it.label; hid.value = it.id; inp.form.submit(); }, {showAll: true});
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !inp.value) { hid.value = ''; } });
+  inp.addEventListener('change', () => { if (!inp.value) { hid.value = ''; inp.form.submit(); } });
+  const clr = document.getElementById('co-clear'); if (clr) clr.addEventListener('click', () => { inp.value = ''; hid.value = ''; inp.form.submit(); });
+})();
+</script>
 {% endblock %}

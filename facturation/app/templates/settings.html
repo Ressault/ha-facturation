@@ -23,6 +23,8 @@
     <div><label>Code APE</label><input name="ape" value="{{ s.ape }}"></div>
     <div><label>E-mail</label><input name="email" value="{{ s.email }}"></div>
     <div><label>Téléphone</label><input name="phone" value="{{ s.phone }}"></div>
+    <div><label>Site internet</label><input name="website" value="{{ s.website or '' }}" placeholder="ex. www.monsite.fr">
+      <div class="help">Affiché en pied de page, après « Entrepreneur individuel (EI) ».</div></div>
     <div><label>IBAN</label><input name="iban" value="{{ s.iban }}"></div>
     <div><label>BIC</label><input name="bic" value="{{ s.bic }}"></div>
     <div class="wide"><label>Immatriculation</label><input name="rcs_rm" value="{{ s.rcs_rm }}" placeholder="ex. Dispensé d'immatriculation au RCS et au RM"></div>

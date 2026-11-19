@@ -2,14 +2,25 @@
 {% block content %}
 <div class="head"><h1>{{ 'Achat récurrent' if r else 'Nouvel achat récurrent' }}</h1></div>
 <form method="post" class="card">
-  <datalist id="sups">{% for s in suppliers %}<option value="{{ s.name }}">{% endfor %}</datalist>
+  {% set rates = [(20, '20 %'), (10, '10 %'), (8.5, '8,5 %'), (5.5, '5,5 %'), (2.1, '2,1 %'), (1.05, '1,05 %'), (0, '0 % (pas de TVA)')] %}
+  {% set curname = r.supplier_name if r and r.supplier_name else '' %}
+  <div class="fgrid">
+    <div><label>Fournisseur</label><select name="supplier_pick" id="supplier_pick"><option value="">—</option>
+      {% for s in suppliers %}<option {{ 'selected' if s.name|lower == curname|lower }}>{{ s.name }}</option>{% endfor %}</select></div>
+    <div><label>Nouveau fournisseur</label><input name="supplier_new" id="supplier_new"></div>
+    <div class="w2"><label>Libellé</label><input name="title" required value="{{ r.title if r else '' }}" placeholder="ex. Abonnement Spotify"></div>
+    <div><label>Montant TTC</label><input name="total_ttc" id="ttc" inputmode="decimal" value="{{ r.total_ttc|qty if r else '' }}" placeholder="0,00"></div>
+    <div><label>TVA récupérable</label>
+      <div class="row" style="flex-wrap:nowrap; gap:6px">
+        <select name="vat_rate" id="rate" style="width:46%">
+          {% for v, l in rates %}<option value="{{ v }}" {{ 'selected' if not r and v == 20 }}>{{ l }}</option>{% endfor %}
+          <option value="" {{ 'selected' if r }}>Montant libre</option></select>
+        <input name="total_tva" id="tva" inputmode="decimal" value="{{ r.total_tva|qty if r else '' }}" placeholder="0,00" style="width:54%">
+      </div></div>
+    <div><label>Total HT</label><div class="ro" id="ht_ro">{{ r.total_ht|money if r else '0,00 €' }}</div></div>
+    <div></div>
+  </div>
   <div class="fields">
-    <div><label>Fournisseur</label><input name="supplier" list="sups" required value="{{ r.supplier_name if r and r.supplier_name else '' }}" autocomplete="off"></div>
-    <div><label>Libellé</label><input name="title" required value="{{ r.title if r else '' }}" placeholder="ex. Abonnement Spotify"></div>
-    <div><label>Montant HT</label><input name="total_ht" id="ht" inputmode="decimal" value="{{ r.total_ht|qty if r else '' }}"></div>
-    <div><label>TVA</label><input name="total_tva" id="tva" inputmode="decimal" value="{{ r.total_tva|qty if r else '' }}">
-      <div class="help"><a href="#" data-r="20">20 %</a> · <a href="#" data-r="10">10 %</a> · <a href="#" data-r="0">sans TVA</a></div></div>
-    <div><label>Montant TTC</label><input name="total_ttc" id="ttc" inputmode="decimal" value="{{ r.total_ttc|qty if r else '' }}"></div>
     <div><label>Fréquence</label><select name="every_months">
       {% for v, l in [(1, 'Tous les mois'), (2, 'Tous les 2 mois'), (3, 'Tous les trimestres'), (6, 'Tous les 6 mois'), (12, 'Tous les ans')] %}
       <option value="{{ v }}" {{ 'selected' if (r.every_months if r else 1) == v }}>{{ l }}</option>{% endfor %}</select></div>
@@ -29,11 +40,16 @@
 {% endblock %}
 {% block scripts %}
 <script>
-const n = v => parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) || 0, f = v => (Math.round(v * 100) / 100).toFixed(2).replace('.', ',');
-document.querySelectorAll('[data-r]').forEach(a => a.addEventListener('click', e => {
-  e.preventDefault(); const r = n(a.dataset.r), ht = document.getElementById('ht'), ttc = document.getElementById('ttc'), tva = document.getElementById('tva');
-  if (n(ht.value)) { const t = n(ht.value) * r / 100; tva.value = f(t); ttc.value = f(n(ht.value) + t); }
-  else if (n(ttc.value)) { const h = n(ttc.value) / (1 + r / 100); ht.value = f(h); tva.value = f(n(ttc.value) - h); }
-}));
+const n = v => parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) || 0;
+const f = v => (Math.round(v * 100) / 100).toFixed(2).replace('.', ',');
+const eur = v => (Math.round(v * 100) / 100).toLocaleString('fr-FR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' €';
+const ttc = document.getElementById('ttc'), rate = document.getElementById('rate'), tva = document.getElementById('tva'), htRo = document.getElementById('ht_ro');
+function showHt() { htRo.textContent = eur(n(ttc.value) - n(tva.value)); }
+function fromRate() { if (rate.value !== '') { const r = n(rate.value), t = n(ttc.value); tva.value = t ? f(t - t / (1 + r / 100)) : ''; } showHt(); }
+ttc.addEventListener('input', fromRate); rate.addEventListener('change', fromRate);
+tva.addEventListener('input', () => { rate.value = ''; showHt(); });
+const pick = document.getElementById('supplier_pick'), neu = document.getElementById('supplier_new');
+pick.addEventListener('change', () => { if (pick.value) neu.value = ''; });
+neu.addEventListener('input', () => { if (neu.value) pick.value = ''; });
 </script>
 {% endblock %}

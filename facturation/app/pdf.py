@@ -96,6 +96,8 @@ def seller_name(s):
 
 def legal_footer(s):
     parts = [f"{s.get('company_name', '')} — Entrepreneur individuel (EI)"]
+    if s.get("website"):
+        parts.append(s["website"].strip())
     if s.get("siret"):
         parts.append(f"SIRET {s['siret']}")
     elif s.get("siren"):
@@ -112,6 +114,44 @@ def legal_footer(s):
     if s.get("footer_note"):
         text += "\n" + s["footer_note"]
     return text
+
+
+def group_iban(iban):
+    raw = "".join((iban or "").split()).upper()
+    return " ".join(raw[i:i + 4] for i in range(0, len(raw), 4))
+
+
+def payment_box(pdf, doc, seller, t, extra):
+    """Encadré « Règlement par virement » : titulaire, IBAN en gros, BIC, référence, échéance, montant."""
+    rest = t["ttc"] - money(extra.get("paid", 0) or 0)
+    rows = [("Titulaire", seller.get("company_name", "")), ("IBAN", group_iban(seller["iban"]))]
+    if seller.get("bic"):
+        rows.append(("BIC", seller["bic"].upper()))
+    rows.append(("Référence à indiquer", f"Facture {doc.get('number') or ''}".strip()))
+    if doc.get("due_date"):
+        rows.append(("À régler avant le", fmt_date(doc["due_date"])))
+    rows.append(("Montant", fmt_money(rest)))
+    h = 9 + 6.4 * len(rows) + 3
+    if pdf.get_y() + h > 262:
+        pdf.add_page()
+    x, y, w = 16, pdf.get_y(), 120
+    pdf.set_fill_color(*LIGHT)
+    pdf.set_draw_color(*HAIR)
+    pdf.rect(x, y, w, h, style="DF", round_corners=True, corner_radius=2.5)
+    pdf.set_xy(x + 5, y + 3.5)
+    pdf.set_font("dejavu", "B", 9.5)
+    pdf.set_text_color(*INK)
+    pdf.cell(w - 10, 5, "Règlement par virement bancaire", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(1.5)
+    for label, val in rows:
+        pdf.set_x(x + 5)
+        pdf.set_font("dejavu", "", 8.2)
+        pdf.set_text_color(*GREY)
+        pdf.cell(36, 6.4, label)
+        pdf.set_text_color(*INK)
+        pdf.set_font("dejavu", "B", 11 if label == "IBAN" else 9)
+        pdf.cell(w - 46, 6.4, val, new_x="LMARGIN", new_y="NEXT")
+    pdf.set_y(y + h + 4)
 
 
 def build_pdf(doc, lines, seller, client, path, extra=None):
@@ -357,10 +397,9 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
     mentions = []
     if doc.get("notes"):
         mentions.append(("", doc["notes"]))
+    if kind == "facture" and seller.get("iban"):
+        payment_box(pdf, doc, seller, t, extra)
     if kind == "facture":
-        if seller.get("iban"):
-            bic = f" · BIC {seller['bic']}" if seller.get("bic") else ""
-            mentions.append(("Paiement", f"Virement — IBAN {seller['iban']}{bic} — référence {doc.get('number') or ''}"))
         mentions.append(("", "Nature de l'opération : prestations de services."))
         mentions.append(("", penalty_text(doc, seller)))
         if client.get("kind", "pro") == "pro":

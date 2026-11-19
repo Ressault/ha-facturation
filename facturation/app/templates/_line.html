@@ -6,7 +6,8 @@
   {%- if k == 'item' %}
   <td><input name="quantity" inputmode="decimal" value="{{ ln.quantity|qty if ln.quantity not in ('', None) else '1' }}" style="text-align:right"></td>
   <td><input type="hidden" name="kind_line" value="item">
-    <textarea name="designation" class="auto lib" rows="1" placeholder="Prestation">{{ ln.designation }}</textarea>
+    <div class="lib-wrap"><textarea name="designation" class="auto lib" rows="1" placeholder="Prestation — tapez ou choisissez ▾">{{ ln.designation }}</textarea>
+      <button type="button" class="pick" title="Choisir une prestation enregistrée" tabindex="-1">▼</button></div>
     <textarea name="description" class="auto desc" rows="1" placeholder="Détail (facultatif)">{{ ln.description or '' }}</textarea>
     {% if doc.kind == 'devis' %}<label class="opt"><input type="checkbox" class="optchk" {{ 'checked' if ln.optional }}> En option <span class="muted">(non comptée dans le total)</span></label>{% endif %}
     <input type="hidden" name="optional" class="optval" value="{{ 1 if ln.optional else 0 }}"></td>

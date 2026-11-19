@@ -250,6 +250,16 @@ CREATE TABLE IF NOT EXISTS urssaf_dues (
     declared_ca REAL,
     note TEXT
 );
+CREATE TABLE IF NOT EXISTS services (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    designation TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    unit TEXT DEFAULT 'u',
+    unit_price REAL DEFAULT 0,
+    vat_rate REAL DEFAULT 20,
+    nature TEXT,
+    position INTEGER DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS urssaf_payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     period TEXT NOT NULL,
@@ -259,6 +269,28 @@ CREATE TABLE IF NOT EXISTS urssaf_payments (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 """
+
+
+SERVICES_SEED = [
+    ("Perspectives extérieures", "- Mise en texture\n- Habillage\n- Mise en lumière\n- Post-production", 450),
+    ("Perspectives intérieures", "- Mise en texture\n- Habillage\n- Mise en lumière\n- Post-production", 400),
+    ("Plan de masse", "- Habillage graphique 2D (noms des rue, boussole, etc)", 200),
+    ("Visite virtuelle", "- XX images 360° (125€/u) (X séjour / X cuisine / X dégagement / X chambres / X salle d'eau / "
+                         "X SDB / X Balcons)\n- Intégration hotspot et génération de la visite (125€)", 125),
+    ("Cyclorama", "- Mise en texture\n- Habillage\n- Mise en lumière\n- Post-production\n- Intégrations Hotspots", 500),
+]
+
+
+def seed_services(conn):
+    """Prestations d'Antonin, ajoutées une seule fois (il peut ensuite les modifier ou les supprimer)."""
+    done = conn.execute("SELECT value FROM settings WHERE key = 'services_seeded'").fetchone()
+    if done and done[0] == "1":
+        return
+    if not conn.execute("SELECT 1 FROM services").fetchone():
+        for i, (name, desc, price) in enumerate(SERVICES_SEED):
+            conn.execute("INSERT INTO services(designation, description, unit, unit_price, vat_rate, nature, position) "
+                         "VALUES (?, ?, 'u', ?, 20, 'bnc', ?)", (name, desc, price, i))
+    conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('services_seeded', '1')")
 
 
 def connect():
@@ -288,6 +320,7 @@ def init_db():
         conn.executescript(SCHEMA)
         conn.executescript(SCHEMA_V2)
         conn.executescript(SCHEMA_V3)
+        seed_services(conn)
         for table, col, decl in MIGRATIONS:
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if col not in cols:

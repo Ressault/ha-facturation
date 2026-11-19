@@ -6,6 +6,7 @@
     <div class="sub">{{ today|date }} · {{ month_label|capitalize }}</div></div>
   <span class="spacer"></span>
   <div class="seg" data-mode><button data-m="ht" class="on">HT</button><button data-m="ttc">TTC</button></div>
+  <button type="button" id="dash-edit" title="Déplacer et redimensionner les tuiles">⇄ Réorganiser</button>
   <a class="btn" href="{{ url_for('doc_new', kind='devis') }}">Nouveau devis</a>
   <a class="btn primary" href="{{ url_for('doc_new', kind='facture') }}">Nouvelle facture</a>
 </div>
@@ -25,42 +26,50 @@
   <a href="{{ url_for('documents', kind='facture') }}">Voir</a></div>
 {% endif %}
 
-<div class="grid g4">
-  <div class="card kpi blue">
+{% set tile_enc_mois %}
+<div class="card kpi blue">
     <div class="l">Encaissé · {{ month_label }}</div>
     <div class="v">{{ amt(stats.mois.enc) }}</div>
     <div class="s">Trimestre <b>{{ amt(stats.trimestre.enc) }}</b></div>
-  </div>
-  <div class="card kpi green">
+</div>
+{% endset %}
+{% set tile_enc_annee %}
+<div class="card kpi green">
     <div class="l">Encaissé · {{ year }}
       {% if last_year.enc.ht > 0 %}{% set dv = ((stats.annee.enc.ht - last_year.enc.ht) / last_year.enc.ht * 100)|round|int %}
-      <span class="delta {{ 'up' if dv >= 0 else 'down' }}" title="Par rapport au {{ today|date }} de {{ year - 1 }}">{{ '+' if dv >= 0 }}{{ dv }} %</span>{% endif %}</div>
+      <span class="delta {{ 'up' if dv >= 0 else 'down' }}" title="Par rapport au {{ today|date }} de {{ year - 1 }}">{{ '+' if dv >= 0 }}{{ dv }} % vs {{ year - 1 }}</span>{% endif %}</div>
     <div class="v">{{ amt(stats.annee.enc) }}</div>
     <div class="s">{{ year - 1 }} à la même date <b>{{ amt(last_year.enc) }}</b> · sur l'année <b>{{ amt(last_year_full.enc) }}</b></div>
-    <svg class="spark" id="spark" viewBox="0 0 240 46" preserveAspectRatio="none"></svg>
-    <div class="legend tiny"><span><i style="background:var(--green)"></i>{{ year }}</span><span><i style="background:var(--line-strong)"></i>{{ year - 1 }}</span></div>
+    <svg class="spark" id="spark" viewBox="0 0 480 120" preserveAspectRatio="none"></svg>
+    <div class="years">{% for yy in years_cmp %}<span class="yr" style="--c:var(--y{{ loop.index0 }})"><i></i>{{ yy.year }}
+      <b>{{ amt(yy.total) }}</b><small>{{ 'à date' if loop.first else 'sur l\'année' }}</small></span>{% endfor %}</div>
   </div>
-  <div class="card kpi">
+{% endset %}
+{% set tile_facture %}
+<div class="card kpi">
     <div class="l">Facturé · {{ month_label }}</div>
     <div class="v">{{ amt(stats.mois.fac) }}</div>
     <div class="s">Trimestre <b>{{ amt(stats.trimestre.fac) }}</b> · {{ year }} <b>{{ amt(stats.annee.fac) }}</b></div>
-  </div>
-  <div class="card kpi amber">
+</div>
+{% endset %}
+{% set tile_reste %}
+<div class="card kpi amber">
     <div class="l">Reste à encaisser</div>
     <div class="v">{{ amt(rest) }}</div>
     <div class="s">{{ unpaid|length }} facture{{ 's' if unpaid|length > 1 }}{% if late %} · <b style="color:var(--orange)">{{ late|length }} en retard</b> ({{ amt(late_sum) }}){% endif %}</div>
   </div>
-</div>
-
-<div class="grid g21">
-  <div class="card">
+{% endset %}
+{% set tile_graphique %}
+<div class="card">
     <div class="row between" style="margin-bottom:8px">
       <h2 style="margin:0">12 derniers mois</h2>
       <div class="legend"><span><i style="background:var(--accent)"></i>Encaissé</span><span><i style="background:var(--bar-fac)"></i>Facturé</span></div>
     </div>
     <svg class="chart" id="chart" viewBox="0 0 720 220" preserveAspectRatio="none"></svg>
-  </div>
-  <div class="card">
+</div>
+{% endset %}
+{% set tile_trimestre %}
+<div class="card">
     <h2>{{ quarter_label }}</h2>
     <div class="mini">
       <span>Chiffre d'affaires encaissé</span><span class="v">{{ amt(stats.trimestre.enc) }}</span>
@@ -80,9 +89,8 @@
       <div class="tiny muted">{{ plafond.ca|money }} encaissés HT sur {{ plafond.limit|int_fr }} € autorisés en {{ year }}</div>
     </div>
   </div>
-</div>
-
-<div class="grid g21">
+{% endset %}
+{% set tile_virement %}
 <div class="card">
   <h2>Encaisser un virement</h2>
   <form method="get" action="{{ url_for('index') }}" class="row" style="flex-wrap:nowrap; align-items:flex-end; gap:8px">
@@ -108,6 +116,8 @@
     {% else %}<p class="small muted" style="margin:10px 0 0">Aucune facture à encaisser ne correspond (numéro, client ou montant).</p>{% endif %}
   {% else %}<p class="tiny muted" style="margin:8px 0 0">L'app retrouve la facture d'après son numéro, le nom du client ou le montant, et garde le libellé comme référence de paiement.</p>{% endif %}
 </div>
+{% endset %}
+{% set tile_raccourcis %}
 <div class="card">
   <h2>Accès rapides</h2>
   <div class="links">
@@ -117,8 +127,8 @@
     <a href="{{ url_for('urssaf') }}">Chiffre d'affaires URSSAF</a>
   </div>
 </div>
-</div>
-
+{% endset %}
+{% set tile_listes %}
 <div class="card tight">
   <div class="tabs" id="tabs">
     <button class="on" data-t="t1">À encaisser<span class="count">{{ unpaid|length }}</span></button>
@@ -171,6 +181,24 @@
     {% else %}<div class="empty">Aucun devis en attente.</div>{% endif %}
   </div>
 </div>
+{% endset %}
+{% set TILES = {"enc_mois": tile_enc_mois, "enc_annee": tile_enc_annee, "facture": tile_facture, "reste": tile_reste,
+  "graphique": tile_graphique, "trimestre": tile_trimestre, "virement": tile_virement, "raccourcis": tile_raccourcis,
+  "listes": tile_listes} %}
+<div class="dashbar" id="dashbar" hidden>
+  <span><b>Mode réorganisation</b> · glissez les tuiles par ⠿ pour les déplacer, ↔ pour changer leur largeur.</span>
+  <span class="spacer" style="flex:1"></span>
+  <button type="button" id="dash-reset" class="small">Disposition par défaut</button>
+  <button type="button" id="dash-save" class="small primary">Enregistrer la disposition</button>
+</div>
+<div class="dash" id="dash">
+{% for t in layout %}
+  <section class="tile w{{ t.w }}" data-id="{{ t.id }}" data-w="{{ t.w }}">
+    <div class="tile-tools"><span class="tgrip" title="Glisser pour déplacer">⠿</span><button type="button" class="tsize" title="Changer la largeur">↔</button></div>
+    {{ TILES[t.id] }}
+  </section>
+{% endfor %}
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -196,13 +224,26 @@ function draw(mode) {
   s += `<text x="${W - 4}" y="${top + 10}" text-anchor="end">${fmt(nice)}</text>`;
   svg.innerHTML = s;
 }
-const CUM = {{ cumul|tojson }};
+const SERIES = {{ series|tojson }};
+const YCOL = ['var(--y0)', 'var(--y1)', 'var(--y2)', 'var(--y3)'];
+const MO = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
 function spark(mode) {
   const svg = document.getElementById('spark'); if (!svg) return;
-  const all = [...CUM.cur, ...CUM.prev].map(p => p[mode]), max = Math.max(1, ...all), W = 240, H = 46;
-  const pts = arr => arr.map((p, i) => `${(i / 11) * W},${H - 3 - (H - 6) * p[mode] / max}`).join(' ');
-  svg.innerHTML = `<polyline points="${pts(CUM.prev)}" fill="none" stroke="var(--line-strong)" stroke-width="2" stroke-dasharray="4 3"/>` +
-    `<polyline points="${pts(CUM.cur)}" fill="none" stroke="var(--green)" stroke-width="2.4" stroke-linejoin="round"/>`;
+  const W = 480, H = 120, L = 4, R = 4, T = 8, B = 16;
+  const max = Math.max(1, ...SERIES.flatMap(s => s.pts.map(p => p[mode])));
+  const X = i => L + (W - L - R) * i / 11, Y = v => T + (H - T - B) * (1 - v / max);
+  let out = '';
+  [0.5, 1].forEach(f => { out += `<line x1="0" x2="${W}" y1="${Y(max * f)}" y2="${Y(max * f)}" stroke="var(--line)" stroke-width="1"/>`; });
+  [0, 3, 6, 9, 11].forEach(i => { out += `<text x="${X(i)}" y="${H - 3}" text-anchor="${i === 0 ? 'start' : i === 11 ? 'end' : 'middle'}" font-size="10" fill="var(--muted)">${MO[i]}</text>`; });
+  SERIES.slice().reverse().forEach((s, ri) => {
+    const i = SERIES.length - 1 - ri; if (!s.pts.length) return;
+    const pts = s.pts.map((p, k) => `${X(k)},${Y(p[mode])}`).join(' ');
+    out += `<polyline points="${pts}" fill="none" stroke="${YCOL[i]}" stroke-width="${i === 0 ? 3 : 1.8}" stroke-linejoin="round" stroke-linecap="round" ${i ? 'opacity=".85"' : ''}><title>${s.year}</title></polyline>`;
+    const last = s.pts.length - 1;
+    out += `<circle cx="${X(last)}" cy="${Y(s.pts[last][mode])}" r="${i === 0 ? 3.5 : 2.5}" fill="${YCOL[i]}"><title>${s.year} : ${fmt(s.pts[last][mode])}</title></circle>`;
+  });
+  out += `<text x="${W - R}" y="${T + 2}" text-anchor="end" font-size="10" fill="var(--muted)">${fmt(max)}</text>`;
+  svg.innerHTML = out;
 }
 document.addEventListener('mode', e => { draw(e.detail); spark(e.detail); });
 let m0 = 'ht'; try { m0 = localStorage.getItem('factu-mode') || 'ht'; } catch (e) {}
@@ -211,5 +252,43 @@ document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
   ['t1', 't2', 't3'].forEach(id => document.getElementById(id).hidden = id !== b.dataset.t);
 }));
+
+// réorganisation des tuiles
+const dash = document.getElementById('dash'), bar = document.getElementById('dashbar'), editBtn = document.getElementById('dash-edit');
+const WIDTHS = [3, 4, 6, 8, 12];
+let dragTile = null;
+editBtn.addEventListener('click', () => {
+  const on = !dash.classList.contains('editing');
+  dash.classList.toggle('editing', on); bar.hidden = !on; editBtn.classList.toggle('primary', on);
+  dash.querySelectorAll('.tile').forEach(t => t.draggable = on);
+});
+dash.querySelectorAll('.tsize').forEach(b => b.addEventListener('click', () => {
+  const t = b.closest('.tile'), w = +t.dataset.w, nw = WIDTHS[(WIDTHS.indexOf(w) + 1) % WIDTHS.length];
+  t.classList.remove('w' + w); t.classList.add('w' + nw); t.dataset.w = nw;
+  setTimeout(() => { draw(curMode()); spark(curMode()); }, 50);
+}));
+dash.addEventListener('dragstart', e => {
+  if (!dash.classList.contains('editing')) return e.preventDefault();
+  dragTile = e.target.closest('.tile'); if (!dragTile) return;
+  dragTile.classList.add('moving'); e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', dragTile.dataset.id); } catch (err) {}
+});
+dash.addEventListener('dragover', e => {
+  if (!dragTile) return; e.preventDefault();
+  const t = e.target.closest('.tile'); if (!t || t === dragTile) return;
+  const r = t.getBoundingClientRect(), before = (e.clientX - r.left) < r.width / 2 && (e.clientY - r.top) < r.height * 0.75 || (e.clientY - r.top) < r.height / 3;
+  dash.insertBefore(dragTile, before ? t : t.nextSibling);
+});
+dash.addEventListener('drop', e => e.preventDefault());
+dash.addEventListener('dragend', () => { if (dragTile) dragTile.classList.remove('moving'); dragTile = null; });
+async function saveLayout(reset) {
+  const tiles = [...dash.querySelectorAll('.tile')].map(t => ({id: t.dataset.id, w: +t.dataset.w}));
+  await fetch('{{ url_for("dash_save") }}', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(reset ? {reset: true} : {tiles})});
+  location.reload();
+}
+document.getElementById('dash-save').addEventListener('click', () => saveLayout(false));
+document.getElementById('dash-reset').addEventListener('click', () => saveLayout(true));
+function curMode() { try { return localStorage.getItem('factu-mode') || 'ht'; } catch (e) { return 'ht'; } }
 </script>
 {% endblock %}
