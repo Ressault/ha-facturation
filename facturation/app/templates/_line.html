@@ -1,34 +1,38 @@
 {%- set k = ln.kind or 'item' -%}
-<tr class="k-{{ k }}" data-kind="{{ k }}">
+{%- set units = ['u', 'h', 'jour', 'forfait', 'image'] -%}
+{%- macro hidden_rest() -%}<input type="hidden" name="description" value=""><input type="hidden" name="quantity" value=""><input type="hidden" name="unit" value=""><input type="hidden" name="unit_price" value=""><input type="hidden" name="vat_rate" value=""><input type="hidden" name="nature" value=""><input type="hidden" name="optional" value="0">{%- endmacro -%}
+<tr class="k-{{ k }}{{ ' is-option' if ln.optional }}" data-kind="{{ k }}">
+  <td class="grip" title="Glisser pour déplacer la ligne">⠿</td>
   {%- if k == 'item' %}
   <td><input name="quantity" inputmode="decimal" value="{{ ln.quantity|qty if ln.quantity not in ('', None) else '1' }}" style="text-align:right"></td>
   <td><input type="hidden" name="kind_line" value="item">
-    <input name="designation" list="catalog" value="{{ ln.designation }}" placeholder="Prestation">
-    <textarea name="description" class="desc" placeholder="Détail (facultatif)">{{ ln.description or '' }}</textarea></td>
-  <td><select name="unit">{% for u in ['u', 'h', 'jour', 'forfait', 'image', 'mois', 'km', 'm2'] %}<option {{ 'selected' if (ln.unit or 'u') == u }}>{{ u }}</option>{% endfor %}
-    {% if ln.unit and ln.unit not in ['u', 'h', 'jour', 'forfait', 'image', 'mois', 'km', 'm2'] %}<option selected>{{ ln.unit }}</option>{% endif %}</select></td>
-  <td><input name="unit_price" inputmode="decimal" value="{{ ln.unit_price|qty if ln.unit_price not in ('', None) else '' }}"></td>
+    <textarea name="designation" class="auto lib" rows="1" placeholder="Prestation">{{ ln.designation }}</textarea>
+    <textarea name="description" class="auto desc" rows="1" placeholder="Détail (facultatif)">{{ ln.description or '' }}</textarea>
+    {% if doc.kind == 'devis' %}<label class="opt"><input type="checkbox" class="optchk" {{ 'checked' if ln.optional }}> En option <span class="muted">(non comptée dans le total)</span></label>{% endif %}
+    <input type="hidden" name="optional" class="optval" value="{{ 1 if ln.optional else 0 }}"></td>
+  <td><select name="unit">{% for u in units %}<option {{ 'selected' if (ln.unit or 'u') == u }}>{{ u }}</option>{% endfor %}
+    {% if ln.unit and ln.unit not in units %}<option selected>{{ ln.unit }}</option>{% endif %}</select></td>
+  <td><input name="unit_price" inputmode="decimal" value="{{ ln.unit_price|qty if ln.unit_price not in ('', None) else '' }}" style="text-align:right"></td>
   <td><select name="vat_rate">{% for r in [20, 10, 5.5, 2.1, 0] %}<option value="{{ r }}" {{ 'selected' if (ln.vat_rate or 0)|float == r }}>{{ r|string|replace('.', ',') }} %</option>{% endfor %}</select></td>
   <td class="hide-m"><select name="nature" title="Nature de l'activité (déclaration URSSAF)">
     {% for v, l in NATURES.items() %}<option value="{{ v }}" {{ 'selected' if (ln.nature or settings.default_nature) == v }}>{{ {'bnc': 'BNC', 'bic': 'BIC presta.', 'vente': 'Vente', 'debours': 'Débours'}[v] }}</option>{% endfor %}</select></td>
   <td class="n lt">0,00 €</td>
   {%- elif k == 'title' %}
-  <td colspan="6"><input type="hidden" name="kind_line" value="title"><input name="designation" value="{{ ln.designation }}" placeholder="Titre de section" style="font-weight:700">
-    <input type="hidden" name="description" value=""><input type="hidden" name="quantity" value=""><input type="hidden" name="unit" value=""><input type="hidden" name="unit_price" value=""><input type="hidden" name="vat_rate" value=""><input type="hidden" name="nature" value=""></td>
+  <td colspan="6"><input type="hidden" name="kind_line" value="title"><textarea name="designation" class="auto title-in" rows="1" placeholder="Titre (facultatif)">{{ ln.designation }}</textarea>{{ hidden_rest() }}</td>
   <td class="tag n">Titre</td>
   {%- elif k == 'comment' %}
-  <td colspan="6"><input type="hidden" name="kind_line" value="comment"><textarea name="designation" placeholder="Commentaire affiché sur le document">{{ ln.designation }}</textarea>
-    <input type="hidden" name="description" value=""><input type="hidden" name="quantity" value=""><input type="hidden" name="unit" value=""><input type="hidden" name="unit_price" value=""><input type="hidden" name="vat_rate" value=""><input type="hidden" name="nature" value=""></td>
+  <td colspan="6"><input type="hidden" name="kind_line" value="comment"><textarea name="designation" class="auto" rows="1" placeholder="Commentaire affiché sur le document">{{ ln.designation }}</textarea>{{ hidden_rest() }}</td>
   <td class="tag n">Commentaire</td>
   {%- elif k == 'subtotal' %}
-  <td colspan="5"><input type="hidden" name="kind_line" value="subtotal"><input name="designation" value="{{ ln.designation or 'Sous-total' }}">
-    <input type="hidden" name="description" value=""><input type="hidden" name="quantity" value=""><input type="hidden" name="unit" value=""><input type="hidden" name="unit_price" value=""><input type="hidden" name="vat_rate" value=""><input type="hidden" name="nature" value=""></td>
+  <td colspan="5"><input type="hidden" name="kind_line" value="subtotal"><input name="designation" value="{{ ln.designation or 'Sous-total' }}" style="text-align:right">{{ hidden_rest() }}</td>
   <td class="tag hide-m">Sous-total</td>
   <td class="n lt">0,00 €</td>
+  {%- elif k == 'blank' %}
+  <td colspan="6" class="tag center"><input type="hidden" name="kind_line" value="blank"><input type="hidden" name="designation" value="">{{ hidden_rest() }}Saut de ligne</td>
+  <td></td>
   {%- else %}
-  <td colspan="6" class="tag center"><input type="hidden" name="kind_line" value="page"><input type="hidden" name="designation" value="—">
-    <input type="hidden" name="description" value=""><input type="hidden" name="quantity" value=""><input type="hidden" name="unit" value=""><input type="hidden" name="unit_price" value=""><input type="hidden" name="vat_rate" value=""><input type="hidden" name="nature" value="">Saut de page</td>
+  <td colspan="6" class="tag center"><input type="hidden" name="kind_line" value="page"><input type="hidden" name="designation" value="—">{{ hidden_rest() }}Saut de page</td>
   <td></td>
   {%- endif %}
-  <td class="tools"><button type="button" class="up" title="Monter">↑</button><button type="button" class="down" title="Descendre">↓</button><button type="button" class="del" title="Supprimer">✕</button></td>
+  <td class="tools"><button type="button" class="del" title="Supprimer la ligne">✕</button></td>
 </tr>

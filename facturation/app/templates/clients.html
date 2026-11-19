@@ -1,18 +1,30 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="head"><h1>Clients</h1><span class="sub">{{ clients|length }}</span><span class="spacer"></span>
+<div class="head"><h1>{{ 'Clients retirés' if show_archived else 'Clients' }}</h1><span class="sub">{{ clients|length }}</span><span class="spacer"></span>
+  {% if show_archived %}<a class="btn" href="{{ url_for('clients') }}">← Clients</a>
+  {% elif n_archived %}<a class="btn" href="{{ url_for('clients', masques=1) }}">Clients retirés ({{ n_archived }})</a>{% endif %}
   <a class="btn primary" href="{{ url_for('client_form') }}">＋ Client</a></div>
-{% if orphans %}
+{% if orphans and not show_archived %}
 <div class="note" style="margin-bottom:16px">{{ orphans }} contact{{ 's' if orphans > 1 }} sans aucune facture ni devis : si ce sont des fournisseurs importés par erreur,
   <a href="{{ url_for('suppliers') }}#reclasser">déplacez-les dans les fournisseurs</a>.</div>
 {% endif %}
-<form method="get" class="card" style="padding:12px 16px"><div class="search"><input name="q" value="{{ q }}" placeholder="Rechercher un client (nom, SIREN, ville, e-mail)…" onchange="this.form.submit()"></div></form>
+<form method="get" class="card" style="padding:12px 16px">{% if show_archived %}<input type="hidden" name="masques" value="1">{% endif %}<div class="search"><input name="q" value="{{ q }}" placeholder="Rechercher un client (nom, SIREN, ville, e-mail)…" onchange="this.form.submit()"></div></form>
+<form method="post" action="{{ url_for('clients_delete') }}" id="bulk"
+      data-confirm="Supprimer les clients cochés ?&#10;&#10;Ceux qui ont des factures ou des devis sont seulement retirés de vos listes : la loi impose de garder leurs factures.">
 <div class="card tight">
   {% if clients %}
+  {% if not show_archived %}
+  <div class="row" style="padding:8px 18px; border-bottom:1px solid var(--line)">
+    <label class="check-row" style="margin:0"><input type="checkbox" id="all"> Tout cocher</label>
+    <span class="spacer" style="flex:1"></span>
+    <button class="danger small" id="bulkbtn" disabled>Supprimer la sélection</button>
+  </div>
+  {% endif %}
   <table class="list">
-    <tr><th>Client</th><th class="hide-m">SIREN</th><th class="hide-m">Ville</th><th class="n">Factures</th><th class="n">CA HT</th><th class="n hide-m">Dernier document</th></tr>
+    <tr>{% if not show_archived %}<th style="width:34px"></th>{% endif %}<th>Client</th><th class="hide-m">SIREN</th><th class="hide-m">Ville</th><th class="n">Factures</th><th class="n">CA HT</th><th class="n hide-m">Dernier document</th></tr>
     {% for c in clients %}
     <tr class="click {{ 'dim' if not c.last_doc }}" data-href="{{ url_for('client_form', client_id=c.id) }}">
+      {% if not show_archived %}<td><input type="checkbox" name="ids" value="{{ c.id }}" class="sel"></td>{% endif %}
       <td><div class="t">{{ c.name }}</div>{% if c.kind == 'particulier' %}<div class="st">Particulier</div>{% elif c.email %}<div class="st">{{ c.email }}</div>{% endif %}</td>
       <td class="hide-m">{{ c.siren or '' }}</td><td class="hide-m">{{ c.city or '' }}</td>
       <td class="n">{{ c.n_fact }}</td><td class="n t">{{ c.ca|money }}</td><td class="n hide-m">{{ c.last_doc|date if c.last_doc else '—' }}</td>
@@ -21,4 +33,13 @@
   </table>
   {% else %}<div class="empty"><div class="big">👥</div>Aucun client.</div>{% endif %}
 </div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+const sels = [...document.querySelectorAll('.sel')], btn = document.getElementById('bulkbtn'), all = document.getElementById('all');
+const upd = () => { if (btn) { const n = sels.filter(x => x.checked).length; btn.disabled = !n; btn.textContent = n ? `Supprimer la sélection (${n})` : 'Supprimer la sélection'; } };
+sels.forEach(x => x.addEventListener('change', upd));
+if (all) all.addEventListener('change', () => { sels.forEach(x => x.checked = all.checked); upd(); });
+</script>
 {% endblock %}

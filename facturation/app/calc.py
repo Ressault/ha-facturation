@@ -78,7 +78,12 @@ def _get(line, key, default=None):
 
 
 def is_item(line) -> bool:
-    return _get(line, "kind", "item") in ("item", "", None)
+    """Ligne chiffrée comptée dans les totaux (une ligne « en option » d'un devis ne l'est pas)."""
+    return _get(line, "kind", "item") in ("item", "", None) and not _get(line, "optional", 0)
+
+
+def is_option(line) -> bool:
+    return _get(line, "kind", "item") in ("item", "", None) and bool(_get(line, "optional", 0))
 
 
 def items(lines):

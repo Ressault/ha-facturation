@@ -555,3 +555,59 @@ def test_v4_purchase_vat_urssaf_filters(env):
         assert client.get(url).status_code == 200, url
     assert "Retard URSSAF" in client.get("/").get_data(as_text=True)
     conn.close()
+
+
+def test_v5_clients_options_preview(env):
+    appmod, db, client = env
+    import logic
+    cid = make_client(client)
+    lone = make_client(client, name="Sans document", siren="552100554")
+    # devis avec une ligne en option, un saut de ligne et un titre vide (ignoré)
+    form = [("kind", "devis"), ("client_id", cid), ("issue_date", "2026-11-19"), ("action", "enregistrer"), ("subject", "Devis")]
+    rows = [("title", "", "", "", "", "", "", "", "0"),
+            ("item", "Perspective", "détail\nsur deux lignes", "2", "u", "450", "20", "bnc", "0"),
+            ("blank", "", "", "", "", "", "", "", "0"),
+            ("item", "Vue aérienne", "", "1", "u", "300", "20", "bnc", "1")]
+    for r in rows:
+        for k, v in zip(["kind_line", "designation", "description", "quantity", "unit", "unit_price", "vat_rate", "nature", "optional"], r):
+            form.append((k, v))
+    from werkzeug.datastructures import MultiDict
+    form = MultiDict(form)
+    r = client.post("/documents/enregistrer", data=form)
+    assert r.status_code == 302
+    conn = db.connect()
+    dv = conn.execute("SELECT * FROM documents WHERE kind='devis'").fetchone()
+    assert dv["total_ht"] == 900 and dv["total_ttc"] == 1080
+    kinds = [(x["kind"], x["optional"]) for x in conn.execute("SELECT * FROM lines WHERE document_id=? ORDER BY position", (dv["id"],))]
+    assert kinds == [("item", 0), ("blank", 0), ("item", 1)]
+    html = client.get(f"/documents/{dv['id']}").get_data(as_text=True)
+    assert "Option" in html and "Options proposées" in html
+    assert client.get(f"/documents/{dv['id']}/pdf").status_code == 200
+    ed = client.get(f"/documents/{dv['id']}/modifier").get_data(as_text=True)
+    assert 'class="grip"' in ed and "En option" in ed and 'data-kind="title"' in ed and "<option>mois</option>" not in ed and "<option>km</option>" not in ed
+    # devis → facture : l'option ne passe pas
+    r = client.post(f"/documents/{dv['id']}/facturer")
+    inv_id = int(r.headers["Location"].rstrip("/").split("/")[-2]) if "/modifier" in r.headers["Location"] else \
+        int(r.headers["Location"].rstrip("/").split("/")[-1])
+    inv = conn.execute("SELECT * FROM documents WHERE id=?", (inv_id,)).fetchone()
+    assert inv["kind"] == "facture" and inv["total_ht"] == 900
+    assert conn.execute("SELECT COUNT(*) FROM lines WHERE document_id=? AND optional=1", (inv_id,)).fetchone()[0] == 0
+    # aperçu PDF sans enregistrer
+    r = client.post("/documents/apercu", data=form)
+    assert r.status_code == 200 and r.mimetype == "application/pdf"
+    assert conn.execute("SELECT COUNT(*) FROM documents WHERE kind='devis'").fetchone()[0] == 1
+    # nouvelle facture : ligne titre vide en tête
+    assert 'data-kind="title"' in client.get("/documents/nouveau?kind=facture").get_data(as_text=True)
+    # suppression des clients : sans document → supprimé ; avec documents → retiré des listes
+    r = client.post("/clients/supprimer", data={"ids": [str(cid), str(lone)]})
+    assert r.status_code == 302
+    assert conn.execute("SELECT COUNT(*) FROM clients WHERE id=?", (lone,)).fetchone()[0] == 0
+    assert conn.execute("SELECT archived FROM clients WHERE id=?", (cid,)).fetchone()[0] == 1
+    assert "Agence Dupont" not in client.get("/clients").get_data(as_text=True).split("<table")[-1]
+    new = client.get("/documents/nouveau?kind=facture").get_data(as_text=True)
+    assert "Agence Dupont" not in new
+    assert "Agence Dupont" in client.get("/clients?masques=1").get_data(as_text=True)
+    client.post(f"/clients/{cid}/restaurer")
+    assert conn.execute("SELECT archived FROM clients WHERE id=?", (cid,)).fetchone()[0] == 0
+    assert client.get("/").status_code == 200
+    conn.close()

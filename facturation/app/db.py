@@ -239,6 +239,8 @@ MIGRATIONS = [
     ("payments", "reference", "TEXT"),
     ("documents", "performed_on", "TEXT"),
     ("documents", "external_number", "TEXT"),
+    ("clients", "archived", "INTEGER NOT NULL DEFAULT 0"),
+    ("lines", "optional", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 SCHEMA_V3 = """

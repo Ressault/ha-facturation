@@ -368,3 +368,22 @@ details > summary::-webkit-details-marker { display: none; }
 .links a:hover { border-color: var(--accent); color: var(--accent-2); }
 .links a small { color: var(--muted); font-weight: 400; }
 @media (max-width: 900px) { .fgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fgrid .w3 { grid-column: 1 / -1; } }
+
+/* -- éditeur : poignée, zones qui s'agrandissent, options -------------------- */
+.lines td.grip { cursor: grab; color: var(--muted); text-align: center; font-size: 16px; user-select: none; padding: 10px 2px !important; width: 26px; }
+.lines td.grip:hover { color: var(--accent); background: var(--hover); }
+.lines tr.dragging td { opacity: .45; background: var(--hover) !important; }
+textarea.auto { resize: none; overflow: hidden; min-height: 34px; line-height: 1.4; }
+.lines textarea.lib { min-height: 34px; }
+.lines textarea.desc { min-height: 34px; margin-top: 5px; font-size: 13px; color: var(--ink-2); }
+.lines textarea.title-in { font-weight: 700; font-size: 15px; }
+.lines tr.k-blank td, .lines tr.k-page td { background: repeating-linear-gradient(90deg, var(--fill) 0 8px, transparent 8px 14px); }
+.lines tr.k-blank td.grip, .lines tr.k-page td.grip, .lines tr.k-blank td.tools, .lines tr.k-page td.tools { background: none; }
+label.opt { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-size: 12.5px; font-weight: 600; color: var(--ink-2); cursor: pointer; }
+label.opt input { width: 15px; height: 15px; }
+.lines tr.is-option td { background: repeating-linear-gradient(135deg, transparent 0 10px, var(--fill) 10px 12px); }
+.lines tr.is-option td.lt { color: var(--muted); text-decoration: line-through; }
+.boxed tr.is-option td { color: var(--muted); }
+.boxed tr.k-blank td { height: 18px; }
+.spark { width: 100%; height: 46px; display: block; margin: 10px 0 4px; }
+@media (max-width: 1100px) { .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

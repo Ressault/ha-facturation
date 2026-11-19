@@ -25,13 +25,20 @@
   <a href="{{ url_for('documents', kind='facture') }}">Voir</a></div>
 {% endif %}
 
-<div class="grid g3">
+<div class="grid g4">
   <div class="card kpi blue">
     <div class="l">Encaissé · {{ month_label }}</div>
     <div class="v">{{ amt(stats.mois.enc) }}</div>
-    <div class="s">Trimestre <b>{{ amt(stats.trimestre.enc) }}</b> · {{ year }} <b>{{ amt(stats.annee.enc) }}</b>
+    <div class="s">Trimestre <b>{{ amt(stats.trimestre.enc) }}</b></div>
+  </div>
+  <div class="card kpi green">
+    <div class="l">Encaissé · {{ year }}
       {% if last_year.enc.ht > 0 %}{% set dv = ((stats.annee.enc.ht - last_year.enc.ht) / last_year.enc.ht * 100)|round|int %}
-      <span class="delta {{ 'up' if dv >= 0 else 'down' }}" title="À date, par rapport à {{ year - 1 }}">{{ '+' if dv >= 0 }}{{ dv }} % vs {{ year - 1 }}</span>{% endif %}</div>
+      <span class="delta {{ 'up' if dv >= 0 else 'down' }}" title="Par rapport au {{ today|date }} de {{ year - 1 }}">{{ '+' if dv >= 0 }}{{ dv }} %</span>{% endif %}</div>
+    <div class="v">{{ amt(stats.annee.enc) }}</div>
+    <div class="s">{{ year - 1 }} à la même date <b>{{ amt(last_year.enc) }}</b> · sur l'année <b>{{ amt(last_year_full.enc) }}</b></div>
+    <svg class="spark" id="spark" viewBox="0 0 240 46" preserveAspectRatio="none"></svg>
+    <div class="legend tiny"><span><i style="background:var(--green)"></i>{{ year }}</span><span><i style="background:var(--line-strong)"></i>{{ year - 1 }}</span></div>
   </div>
   <div class="card kpi">
     <div class="l">Facturé · {{ month_label }}</div>
@@ -189,9 +196,17 @@ function draw(mode) {
   s += `<text x="${W - 4}" y="${top + 10}" text-anchor="end">${fmt(nice)}</text>`;
   svg.innerHTML = s;
 }
-document.addEventListener('mode', e => draw(e.detail));
+const CUM = {{ cumul|tojson }};
+function spark(mode) {
+  const svg = document.getElementById('spark'); if (!svg) return;
+  const all = [...CUM.cur, ...CUM.prev].map(p => p[mode]), max = Math.max(1, ...all), W = 240, H = 46;
+  const pts = arr => arr.map((p, i) => `${(i / 11) * W},${H - 3 - (H - 6) * p[mode] / max}`).join(' ');
+  svg.innerHTML = `<polyline points="${pts(CUM.prev)}" fill="none" stroke="var(--line-strong)" stroke-width="2" stroke-dasharray="4 3"/>` +
+    `<polyline points="${pts(CUM.cur)}" fill="none" stroke="var(--green)" stroke-width="2.4" stroke-linejoin="round"/>`;
+}
+document.addEventListener('mode', e => { draw(e.detail); spark(e.detail); });
 let m0 = 'ht'; try { m0 = localStorage.getItem('factu-mode') || 'ht'; } catch (e) {}
-draw(m0);
+draw(m0); spark(m0);
 document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
   ['t1', 't2', 't3'].forEach(id => document.getElementById(id).hidden = id !== b.dataset.t);

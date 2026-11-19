@@ -252,6 +252,17 @@ def index():
         except ValueError:
             same_day = today.replace(year=y - 1, day=28)
         last_year = sums(c, f"{y - 1}-01-01", (same_day + timedelta(days=1)).isoformat())
+        last_year_full = sums(c, f"{y - 1}-01-01", f"{y}-01-01")
+        cumul = {"cur": [], "prev": []}
+        acc = {"cur": {"ht": 0.0, "ttc": 0.0}, "prev": {"ht": 0.0, "ttc": 0.0}}
+        for m in range(1, 13):
+            for key, yy_ in (("cur", y), ("prev", y - 1)):
+                if key == "cur" and m > today.month:
+                    continue
+                ms, me = calc.month_bounds(f"{yy_}-{m:02d}")
+                e_ = sums(c, ms, me)["enc"]
+                acc[key] = {"ht": acc[key]["ht"] + e_["ht"], "ttc": acc[key]["ttc"] + e_["ttc"]}
+                cumul[key].append(dict(acc[key]))
         ca_year = stats["annee"]["enc"]["ht"]
         plafond = {"limit": PLAFOND_MICRO_SERVICES, "ca": ca_year,
                    "pct": min(100, round(100 * ca_year / PLAFOND_MICRO_SERVICES, 1)) if ca_year > 0 else 0}
@@ -262,6 +273,7 @@ def index():
         return render_template("index.html", stats=stats, unpaid=unpaid, late=late, rest=rest, late_sum=late_sum,
                                drafts=drafts, devis=devis, chart=chart, month_label=period_label(month),
                                quarter_label=f"T{q[-1]} {q[:4]}", year=y, pdp_errors=errors, last_year=last_year,
+                               last_year_full=last_year_full, cumul=cumul,
                                plafond=plafond, arrears=logic.urssaf_arrears(c), transfer=transfer)
     finally:
         c.close()
@@ -288,13 +300,17 @@ def clients():
                "ELSE total_ht END),0) FROM documents d WHERE d.client_id=cl.id AND d.kind IN ('facture','avoir') "
                "AND d.status!='brouillon') AS ca, (SELECT MAX(issue_date) FROM documents d WHERE d.client_id=cl.id) "
                "AS last_doc FROM clients cl")
-        args = []
+        show_archived = request.args.get("masques") == "1"
+        sql += " WHERE COALESCE(cl.archived, 0) = ?"
+        args = [1 if show_archived else 0]
         if q:
-            sql += " WHERE cl.name LIKE ? OR cl.siren LIKE ? OR cl.city LIKE ? OR cl.email LIKE ?"
-            args = [f"%{q}%"] * 4
+            sql += " AND (cl.name LIKE ? OR cl.siren LIKE ? OR cl.city LIKE ? OR cl.email LIKE ?)"
+            args += [f"%{q}%"] * 4
         rows = c.execute(sql + " ORDER BY cl.name COLLATE NOCASE", args).fetchall()
         orphans = sum(1 for r in rows if not r["last_doc"])
-        return render_template("clients.html", clients=rows, q=q, orphans=orphans)
+        n_archived = c.execute("SELECT COUNT(*) n FROM clients WHERE archived=1").fetchone()["n"]
+        return render_template("clients.html", clients=rows, q=q, orphans=orphans, show_archived=show_archived,
+                               n_archived=n_archived)
     finally:
         c.close()
 
@@ -352,11 +368,33 @@ def clients_to_suppliers():
 @app.route("/clients/<int:client_id>/supprimer", methods=["POST"])
 def client_delete(client_id):
     with db.transaction() as c:
-        if c.execute("SELECT 1 FROM documents WHERE client_id=?", (client_id,)).fetchone():
-            raise logic.BusinessError("Ce client a des documents : il ne peut pas être supprimé.")
-        c.execute("DELETE FROM clients WHERE id=?", (client_id,))
-    flash("Client supprimé.", "ok")
+        n = logic.delete_clients(c, [client_id])
+    flash("Client supprimé." if n["deleted"] else
+          "Client retiré de vos listes. Ses factures sont conservées (obligation légale de 10 ans) et le restent "
+          "à son nom.", "ok")
     return redirect(url_for("clients"))
+
+
+@app.route("/clients/supprimer", methods=["POST"])
+def clients_delete():
+    ids = [int(x) for x in request.form.getlist("ids") if x.isdigit()]
+    with db.transaction() as c:
+        n = logic.delete_clients(c, ids)
+    parts = []
+    if n["deleted"]:
+        parts.append(f"{n['deleted']} client(s) supprimé(s)")
+    if n["archived"]:
+        parts.append(f"{n['archived']} retiré(s) des listes (leurs factures sont conservées)")
+    flash(" · ".join(parts) or "Aucun client sélectionné.", "ok")
+    return redirect(url_for("clients"))
+
+
+@app.route("/clients/<int:client_id>/restaurer", methods=["POST"])
+def client_restore(client_id):
+    with db.transaction() as c:
+        c.execute("UPDATE clients SET archived=0 WHERE id=?", (client_id,))
+    flash("Client remis dans vos listes.", "ok")
+    return redirect(url_for("client_form", client_id=client_id))
 
 
 @app.route("/api/siren/<siren>")
@@ -517,9 +555,10 @@ def doc_new():
     try:
         s = db.get_settings(c)
         doc = default_doc(c, kind, request.args.get("client_id", type=int))
-        lines = [{"kind": "item", "designation": "", "description": "", "quantity": 1, "unit": "u", "unit_price": "",
+        lines = [{"kind": "title", "designation": ""},
+                 {"kind": "item", "designation": "", "description": "", "quantity": 1, "unit": "u", "unit_price": "",
                   "vat_rate": float(s.get("default_vat_rate") or 20), "nature": s.get("default_nature") or "bnc"}]
-        return render_template("doc_form.html", doc=doc, lines=lines, clients=all_clients(c), catalog=catalog(c),
+        return render_template("doc_form.html", doc=doc, lines=lines, clients=all_clients(c, doc.get("client_id")),
                                preview=logic.preview_number(c, kind, date.today().isoformat()))
     finally:
         c.close()
@@ -534,9 +573,55 @@ def doc_edit(doc_id):
             flash("Une facture finalisée ne se modifie plus. Pour la corriger : Supprimer (un avoir est créé), "
                   "puis Dupliquer.", "error")
             return redirect(url_for("doc_view", doc_id=doc_id))
-        return render_template("doc_form.html", doc=doc, lines=lines, clients=all_clients(c), catalog=catalog(c),
+        return render_template("doc_form.html", doc=doc, lines=with_title(lines), clients=all_clients(c, doc["client_id"]),
                                preview=logic.preview_number(c, doc["kind"], doc["issue_date"] or date.today().isoformat())
                                if doc["status"] == "brouillon" else None)
+    finally:
+        c.close()
+
+
+def form_lines(f):
+    keys = ["kind_line", "designation", "description", "quantity", "unit", "unit_price", "vat_rate", "nature",
+            "optional"]
+    cols = {k: f.getlist(k) for k in keys}
+    lines = []
+    for i in range(len(cols["designation"])):
+        ln = {k: (cols[k][i] if i < len(cols[k]) else "") for k in keys}
+        ln["kind"] = ln.pop("kind_line") or "item"
+        lines.append(ln)
+    return lines
+
+
+@app.route("/documents/apercu", methods=["POST"])
+def doc_preview():
+    """Aperçu PDF du document tel qu'il est dans l'éditeur, sans l'enregistrer."""
+    f = request.form
+    c = conn()
+    try:
+        s = db.get_settings(c)
+        kind = f.get("kind") or "facture"
+        doc = {r[1]: None for r in c.execute("PRAGMA table_info(documents)").fetchall()}
+        doc.update({k: (f.get(k) or None) for k in ("issue_date", "due_date", "validity_date", "subject", "service_date",
+                                                   "notes", "payment_terms")})
+        doc.update(kind=kind, status="brouillon", id=f.get("id", type=int) or 0,
+                   penalty_rate=logic._rate(f.get("penalty_rate")), discount_rate=logic._rate(f.get("discount_rate")),
+                   number=logic.preview_number(c, kind, f.get("issue_date") or date.today().isoformat()) if kind == "devis"
+                   else None)
+        lines = logic.clean_lines(form_lines(f), s.get("default_nature") or "bnc")
+        if not f.get("client_id", type=int):
+            return "<p style='font-family:sans-serif;padding:30px'>Choisissez d'abord un client pour voir l'aperçu.</p>"
+        seller = logic.snapshot_seller(c)
+        client = logic.snapshot_client(c, f.get("client_id", type=int))
+        path = os.path.join(db.DATA_DIR, "tmp", f"apercu-editeur-{doc['id']}.pdf")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        extra = {}
+        if kind == "avoir" and f.get("avoir_of_id", type=int):
+            ref = c.execute("SELECT number, issue_date FROM documents WHERE id=?", (f.get("avoir_of_id", type=int),)).fetchone()
+            if ref:
+                extra = {"avoir_of_number": ref["number"], "avoir_of_date": ref["issue_date"]}
+        from pdf import build_pdf
+        build_pdf(doc, lines, seller, client, path, extra)
+        return send_file(path, mimetype="application/pdf", download_name=f"Aperçu {KIND_LABEL.get(kind, '')}.pdf")
     finally:
         c.close()
 
@@ -545,13 +630,7 @@ def doc_edit(doc_id):
 def doc_save():
     f = request.form
     doc_id = f.get("id", type=int)
-    keys = ["kind_line", "designation", "description", "quantity", "unit", "unit_price", "vat_rate", "nature"]
-    cols = {k: f.getlist(k) for k in keys}
-    lines = []
-    for i in range(len(cols["designation"])):
-        ln = {k: (cols[k][i] if i < len(cols[k]) else "") for k in keys}
-        ln["kind"] = ln.pop("kind_line") or "item"
-        lines.append(ln)
+    lines = form_lines(f)
     with db.transaction() as c:
         doc_id = logic.save_document(c, doc_id, f.to_dict(), lines)
         if f.get("action") == "valider":
@@ -629,7 +708,9 @@ def doc_view(doc_id):
         shown = []
         for ln in lines:
             ln = dict(ln)
-            if (ln.get("kind") or "item") == "item":
+            if (ln.get("kind") or "item") == "item" and ln.get("optional"):
+                ln["opt_ht"] = float(calc.line_net(ln))
+            elif (ln.get("kind") or "item") == "item":
                 running += calc.line_net(ln)
             elif ln["kind"] == "subtotal":
                 ln["subtotal"] = float(running)
@@ -1337,8 +1418,17 @@ def health():
 
 # -- utilitaires --------------------------------------------------------------
 
-def all_clients(c):
-    return c.execute("SELECT id, name, kind, email FROM clients ORDER BY name COLLATE NOCASE").fetchall()
+def with_title(lines):
+    """Une ligne titre vide en tête de l'éditeur si le document n'en a pas (ignorée si elle reste vide)."""
+    if lines and (lines[0].get("kind") or "item") == "title":
+        return lines
+    return [{"kind": "title", "designation": ""}] + list(lines)
+
+
+def all_clients(c, keep_id=None):
+    """Clients proposés dans la liste déroulante (sans ceux retirés, sauf celui déjà choisi)."""
+    return c.execute("SELECT id, name, kind, email FROM clients WHERE COALESCE(archived, 0) = 0 OR id = ? "
+                     "ORDER BY name COLLATE NOCASE", (keep_id or 0,)).fetchall()
 
 
 def catalog(c):

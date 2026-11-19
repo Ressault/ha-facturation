@@ -44,10 +44,9 @@
     {% endif %}
   </div>
 
-  <datalist id="catalog">{% for c in catalog %}<option value="{{ c.designation }}">{% endfor %}</datalist>
   <table class="lines boxed" id="lines">
-    <thead><tr><th class="n" style="width:68px">Qté</th><th>Libellé</th><th style="width:86px">Unité</th><th style="width:105px">PU HT</th>
-      <th style="width:80px">TVA</th><th style="width:118px" class="hide-m">Nature</th><th class="n" style="width:105px">Tot. HT</th><th style="width:88px"></th></tr></thead>
+    <thead><tr><th style="width:26px"></th><th class="n" style="width:68px">Qté</th><th>Libellé</th><th style="width:86px">Unité</th><th style="width:105px">PU HT</th>
+      <th style="width:92px">TVA</th><th style="width:118px" class="hide-m">Nature</th><th class="n" style="width:105px">Tot. HT</th><th style="width:40px"></th></tr></thead>
     <tbody>
     {% for ln in lines %}{% include "_line.html" %}{% endfor %}
     </tbody>
@@ -57,26 +56,30 @@
     <button type="button" data-add="title">＋ Titre</button>
     <button type="button" data-add="subtotal">＋ Sous-total</button>
     <button type="button" data-add="comment">＋ Commentaire</button>
+    <button type="button" data-add="blank">＋ Saut de ligne</button>
     <button type="button" data-add="page">＋ Saut de page</button>
-    <span class="spacer" style="flex:1"></span><span class="tiny muted" style="align-self:center">↑ ↓ pour réordonner</span>
+    <span class="spacer" style="flex:1"></span><span class="tiny muted" style="align-self:center">⠿ glisser pour déplacer une ligne</span>
   </div>
   <template id="tpl-item">{% with ln = {'kind': 'item', 'designation': '', 'quantity': 1, 'unit': 'u', 'unit_price': '', 'vat_rate': settings.default_vat_rate|float, 'nature': settings.default_nature} %}{% include "_line.html" %}{% endwith %}</template>
   <template id="tpl-title">{% with ln = {'kind': 'title', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
   <template id="tpl-subtotal">{% with ln = {'kind': 'subtotal', 'designation': 'Sous-total'} %}{% include "_line.html" %}{% endwith %}</template>
   <template id="tpl-comment">{% with ln = {'kind': 'comment', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
+  <template id="tpl-blank">{% with ln = {'kind': 'blank', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
   <template id="tpl-page">{% with ln = {'kind': 'page', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
 
   <div class="row" style="align-items:flex-start; margin-top:14px; gap:18px">
     <div style="flex:1; min-width:260px"><label>Note en bas du document (facultatif)</label>
-      <textarea name="notes" placeholder="ex. Acompte de 30 % à la commande" style="min-height:96px">{{ doc.notes or '' }}</textarea></div>
+      <textarea name="notes" class="auto" placeholder="ex. Acompte de 30 % à la commande" style="min-height:96px">{{ doc.notes or '' }}</textarea></div>
     <table class="boxed" style="width:320px">
       <tbody><tr><td>TOTAL HT</td><td class="n t" id="tht">0,00 €</td></tr></tbody>
+      <tbody id="topt"></tbody>
       <tbody id="tvat"></tbody>
       <tfoot><tr class="grand"><td style="text-align:left">TOTAL TTC</td><td id="tttc">0,00 €</td></tr></tfoot>
     </table>
   </div>
 
   <div class="formbar">
+    <button type="submit" class="left" formaction="{{ url_for('doc_preview') }}" formtarget="_blank" formnovalidate>👁 Aperçu PDF</button>
     <a class="btn" href="{{ url_for('doc_view', doc_id=doc.id) if doc.id else url_for('documents', kind=doc.kind if doc.kind != 'avoir' else 'facture') }}">Annuler</a>
     {% if is_devis %}
       <button class="primary" name="action" value="enregistrer">Enregistrer le devis</button>
@@ -91,19 +94,23 @@
 {% endblock %}
 {% block scripts %}
 <script>
-const catalog = {{ catalog|map('list')|list|tojson }};
 const fmt = v => v.toLocaleString('fr-FR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' €';
 const num = v => parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) || 0;
 const r2 = v => Math.round((v + Number.EPSILON) * 100) / 100;
 const body = document.querySelector('#lines tbody');
+function grow(t) { t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; }
 function recalc() {
-  let ht = 0, running = 0; const vat = {};
+  let ht = 0, running = 0, opt = 0; const vat = {};
   body.querySelectorAll('tr').forEach(tr => {
     const k = tr.dataset.kind;
     if (k === 'item') {
       const q = num(tr.querySelector('[name=quantity]').value), p = num(tr.querySelector('[name=unit_price]').value);
       const rate = num(tr.querySelector('[name=vat_rate]').value), t = r2(q * p);
-      tr.querySelector('.lt').textContent = fmt(t); ht += t; running += t; vat[rate] = (vat[rate] || 0) + t;
+      const isOpt = tr.querySelector('.optval').value === '1';
+      tr.classList.toggle('is-option', isOpt);
+      tr.querySelector('.lt').textContent = fmt(t);
+      if (isOpt) { opt += t; return; }
+      ht += t; running += t; vat[rate] = (vat[rate] || 0) + t;
     } else if (k === 'subtotal') {
       tr.querySelector('.lt').textContent = fmt(running); running = 0;
     }
@@ -114,36 +121,51 @@ function recalc() {
     rows += `<tr><td>TVA ${String(r).replace('.', ',')} %</td><td class="n">${fmt(t)}</td></tr>`;
   });
   document.getElementById('tvat').innerHTML = rows;
+  document.getElementById('topt').innerHTML = opt ? `<tr><td class="muted">Options (hors total)</td><td class="n muted">${fmt(opt)}</td></tr>` : '';
   document.getElementById('tht').textContent = fmt(ht);
   document.getElementById('tttc').textContent = fmt(ht + tva);
 }
 function bind(tr) {
-  tr.querySelectorAll('input,select,textarea').forEach(i => i.addEventListener('input', recalc));
+  tr.querySelectorAll('input,select,textarea').forEach(i => { i.setAttribute('autocomplete', 'off'); i.addEventListener('input', recalc); });
+  tr.querySelectorAll('textarea.auto').forEach(t => { t.addEventListener('input', () => grow(t)); requestAnimationFrame(() => grow(t)); });
+  const chk = tr.querySelector('.optchk');
+  if (chk) chk.addEventListener('change', () => { tr.querySelector('.optval').value = chk.checked ? '1' : '0'; recalc(); });
   tr.querySelector('.del').addEventListener('click', () => {
     if (tr.dataset.kind === 'item' && body.querySelectorAll('tr[data-kind=item]').length <= 1) return;
     tr.remove(); recalc();
   });
-  tr.querySelector('.up').addEventListener('click', () => { if (tr.previousElementSibling) { body.insertBefore(tr, tr.previousElementSibling); recalc(); } });
-  tr.querySelector('.down').addEventListener('click', () => { if (tr.nextElementSibling) { body.insertBefore(tr.nextElementSibling, tr); recalc(); } });
-  const des = tr.querySelector('input[name=designation][list]');
-  if (des) des.addEventListener('change', () => {
-    const hit = catalog.find(c => c[0] === des.value);
-    if (!hit) return;
-    const price = tr.querySelector('[name=unit_price]');
-    if (!price.value) price.value = String(hit[2]).replace('.', ',');
-    tr.querySelector('[name=unit]').value = hit[1] || 'u';
-    tr.querySelector('[name=vat_rate]').value = String(hit[3]).replace(/\.0$/, '');
-    if (hit[4]) tr.querySelector('[name=nature]').value = hit[4];
-    recalc();
-  });
 }
 body.querySelectorAll('tr').forEach(bind);
+document.querySelectorAll('textarea.auto').forEach(t => { t.addEventListener('input', () => grow(t)); grow(t); });
+window.addEventListener('resize', () => document.querySelectorAll('textarea.auto').forEach(grow));
 document.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => {
   const tpl = document.getElementById('tpl-' + b.dataset.add).content.firstElementChild.cloneNode(true);
   body.appendChild(tpl); bind(tpl); recalc();
   const first = tpl.querySelector('input:not([type=hidden]),textarea'); if (first) first.focus();
 }));
 recalc();
+
+// glisser-déposer des lignes par la poignée ⠿
+let dragRow = null;
+body.addEventListener('mousedown', e => { const g = e.target.closest('.grip'); if (g) g.parentElement.draggable = true; });
+body.addEventListener('touchstart', e => { const g = e.target.closest('.grip'); if (g) g.parentElement.draggable = true; }, {passive: true});
+document.addEventListener('mouseup', () => body.querySelectorAll('tr[draggable=true]').forEach(t => { if (t !== dragRow) t.draggable = false; }));
+body.addEventListener('dragstart', e => {
+  dragRow = e.target.closest('tr'); if (!dragRow) return;
+  dragRow.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', ''); } catch (err) {}
+});
+body.addEventListener('dragover', e => {
+  if (!dragRow) return; e.preventDefault();
+  const tr = e.target.closest('tr'); if (!tr || tr === dragRow || tr.parentElement !== body) return;
+  const r = tr.getBoundingClientRect();
+  body.insertBefore(dragRow, e.clientY > r.top + r.height / 2 ? tr.nextSibling : tr);
+});
+body.addEventListener('drop', e => e.preventDefault());
+body.addEventListener('dragend', () => {
+  if (!dragRow) return; dragRow.classList.remove('dragging'); dragRow.draggable = false; dragRow = null; recalc();
+});
+
 // échéance automatique
 const terms = document.getElementById('payment_terms'), due = document.getElementById('due_date'), issue = document.getElementById('issue_date');
 function computeDue() {

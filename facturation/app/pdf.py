@@ -237,10 +237,14 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
     table_header()
     pdf.table_header = table_header
     running = d(0)
+    options_total = d(0)
     for ln in lines:
         lk = ln.get("kind") or "item"
         if lk == "page":
             pdf.add_page()
+            continue
+        if lk == "blank":
+            pdf.ln(5)
             continue
         if lk == "title":
             if pdf.get_y() > 250:
@@ -266,7 +270,8 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
             pdf.ln(1.5)
             running = d(0)
             continue
-        text = ln["designation"]
+        optional = bool(ln.get("optional"))
+        text = ln["designation"] + ("  — en option" if optional else "")
         desc = ln.get("description") or ""
         pdf.set_font("dejavu", "", 9)
         h_title = 5 * len(pdf.multi_cell(widths[0], 5, text, dry_run=True, output="LINES"))
@@ -290,7 +295,11 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
         pdf.set_font("dejavu", "", 9)
         pdf.set_text_color(*INK)
         net = line_net(ln)
-        running += net
+        if optional:
+            pdf.set_text_color(*GREY)
+            options_total += net
+        else:
+            running += net
         vals = [fmt_qty(ln["quantity"]), ln.get("unit") or "", fmt_money(ln["unit_price"]),
                 fmt_rate(ln["vat_rate"]), fmt_money(net)]
         for w, v in zip(widths[1:], vals):
@@ -299,6 +308,13 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
         pdf.set_draw_color(*HAIR)
         pdf.line(16, y0 + h_total - 1, 194, y0 + h_total - 1)
     pdf.table_header = None
+
+    if options_total:
+        pdf.ln(2)
+        pdf.set_font("dejavu", "", 8.2)
+        pdf.set_text_color(*GREY)
+        pdf.multi_cell(0, 4.4, f"Options proposées, non comprises dans le total : {fmt_money(options_total)} HT.",
+                       new_x="LMARGIN", new_y="NEXT")
 
     # --- Totaux
     pdf.ln(4)

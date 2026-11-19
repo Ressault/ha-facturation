@@ -80,14 +80,15 @@
       {% set k = ln.kind or 'item' %}
       {% if k == 'item' %}
       {% set lht = ln.quantity * ln.unit_price %}{% set ltva = lht * (ln.vat_rate or 0) / 100 %}
-      <tr><td class="n">{{ ln.quantity|qty }}{% if ln.unit and ln.unit != 'u' %} <span class="muted small">{{ ln.unit }}</span>{% endif %}</td>
-        <td>{{ ln.designation }}{% if ln.description %}<div class="desc-ro">{{ ln.description }}</div>{% endif %}
+      <tr class="{{ 'is-option' if ln.optional }}"><td class="n">{{ ln.quantity|qty }}{% if ln.unit and ln.unit != 'u' %} <span class="muted small">{{ ln.unit }}</span>{% endif %}</td>
+        <td><span style="white-space:pre-line">{{ ln.designation }}</span>{% if ln.optional %} <span class="pill blue">Option</span>{% endif %}{% if ln.description %}<div class="desc-ro">{{ ln.description }}</div>{% endif %}
           {% if ln.nature and ln.nature != settings.default_nature %}<span class="pill grey" style="margin-top:3px">{{ {'bnc': 'BNC', 'bic': 'BIC', 'vente': 'Vente', 'debours': 'Débours'}[ln.nature] }}</span>{% endif %}</td>
         <td class="n hide-m">{{ ln.vat_rate|rate }}</td><td class="n">{{ ln.unit_price|money }}</td>
         <td class="n">{{ lht|money }}</td><td class="n hide-m">{{ ltva|money }}</td><td class="n">{{ (lht + ltva)|money }}</td></tr>
       {% elif k == 'title' %}<tr class="k-title"><td></td><td colspan="6" style="white-space:pre-line">{{ ln.designation }}</td></tr>
       {% elif k == 'comment' %}<tr class="k-comment"><td></td><td colspan="6" style="white-space:pre-line">{{ ln.designation }}</td></tr>
       {% elif k == 'subtotal' %}<tr class="k-subtotal"><td></td><td colspan="3" class="n">{{ ln.designation }}</td><td class="n">{{ ln.subtotal|money }}</td><td class="hide-m"></td><td></td></tr>
+      {% elif k == 'blank' %}<tr class="k-blank"><td></td><td colspan="6"></td></tr>
       {% else %}<tr class="k-page"><td colspan="7">saut de page</td></tr>{% endif %}
     {% endfor %}
     </tbody>
@@ -95,6 +96,8 @@
       <tr><td colspan="6">TOTAL HT</td><td>{{ t.ht|money }}</td></tr>
       {% for r, b, v in t.breakdown %}<tr><td colspan="6">TVA {{ r|rate }}</td><td>{{ v|money }}</td></tr>{% endfor %}
       <tr class="grand"><td colspan="6">TOTAL TTC</td><td>{{ t.ttc|money }}</td></tr>
+      {% set opts = lines|selectattr('optional')|list %}
+      {% if opts %}<tr><td colspan="6" class="muted" style="font-weight:500">Options proposées, non comprises dans le total (HT)</td><td class="muted">{{ opts|sum(attribute='opt_ht')|money }}</td></tr>{% endif %}
     </tfoot>
   </table>
   {% if doc.notes %}<div class="ro" style="margin-top:12px; white-space:pre-line">{{ doc.notes }}</div>{% endif %}

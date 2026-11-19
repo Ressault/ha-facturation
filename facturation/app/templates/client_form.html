@@ -39,13 +39,20 @@
   <button class="primary">Enregistrer</button>
 </form>
 <div>
-  {% if client and not docs %}
+  {% if client and client.archived %}
+  <div class="warn">Ce client est retiré de vos listes (il n'apparaît plus dans le choix du client). Ses documents sont conservés.
+    <form method="post" action="{{ url_for('client_restore', client_id=client.id) }}" style="margin-top:8px"><button class="small">Le remettre dans mes listes</button></form></div>
+  {% elif client and not docs %}
   <div class="card"><h3>Pas un client ?</h3>
     <p class="small muted">Ce contact n'a aucun document. S'il s'agit d'un fournisseur, déplacez-le.</p>
     <div class="actions">
       <form method="post" action="{{ url_for('clients_to_suppliers') }}"><input type="hidden" name="ids" value="{{ client.id }}"><button>Déplacer vers les fournisseurs</button></form>
-      <form method="post" action="{{ url_for('client_delete', client_id=client.id) }}" data-confirm="Supprimer ce contact ?"><button class="danger">Supprimer</button></form>
+      <form method="post" action="{{ url_for('client_delete', client_id=client.id) }}" data-confirm="Supprimer ce client ?"><button class="danger">Supprimer</button></form>
     </div></div>
+  {% elif client %}
+  <div class="card"><h3>Supprimer ce client</h3>
+    <p class="small muted">Il a des factures ou des devis : il sera retiré de vos listes et du choix du client, mais ses documents restent (conservation légale de 10 ans).</p>
+    <form method="post" action="{{ url_for('client_delete', client_id=client.id) }}" data-confirm="Retirer {{ client.name }} de vos listes ? Ses documents sont conservés."><button class="danger">Supprimer</button></form></div>
   {% endif %}
   {% if docs %}
   <div class="card tight"><h2>Documents</h2>

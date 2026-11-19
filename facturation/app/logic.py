@@ -92,7 +92,7 @@ def credited_amount(conn, doc_id):
 
 from calc import PAYMENT_TERMS  # noqa: E402
 PAYMENT_TERMS_LABEL = dict(PAYMENT_TERMS)
-LINE_KINDS = ("item", "title", "subtotal", "comment", "page")
+LINE_KINDS = ("item", "title", "subtotal", "comment", "page", "blank")
 
 
 def _end_of_month(dt):
@@ -131,6 +131,7 @@ def clean_lines(lines, default_nature="bnc"):
         item = kind == "item"
         clean.append({
             "position": len(clean), "kind": kind,
+            "optional": 1 if item and str(ln.get("optional") or "0") in ("1", "on", "true") else 0,
             "designation": title or ("Sous-total" if kind == "subtotal" else ""),
             "description": (ln.get("description") or "").strip() if item else "",
             "quantity": float(d(ln.get("quantity") or 1)) if item else 0.0,
@@ -146,9 +147,10 @@ def insert_lines(conn, doc_id, lines):
     for ln in lines:
         conn.execute(
             "INSERT INTO lines(document_id, position, kind, designation, description, quantity, unit, unit_price, "
-            "vat_rate, nature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "vat_rate, nature, optional) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (doc_id, ln["position"], ln.get("kind") or "item", ln["designation"], ln.get("description") or "",
-             ln["quantity"], ln.get("unit") or "", ln["unit_price"], ln["vat_rate"], ln.get("nature")))
+             ln["quantity"], ln.get("unit") or "", ln["unit_price"], ln["vat_rate"], ln.get("nature"),
+             1 if ln.get("optional") else 0))
 
 
 def _rate(v):
@@ -300,6 +302,10 @@ def duplicate_as(conn, src_id, kind, avoir=False):
         vals["subject"] = f"Avoir sur facture {src['number']}"
     if src["kind"] == "devis":
         vals["source_devis_id"] = src_id
+    if src["kind"] == "devis":  # les lignes en option ne passent pas sur la facture
+        lines = [dict(ln, position=i) for i, ln in enumerate(x for x in lines if not x.get("optional"))]
+        t = totals(lines)
+        vals.update(total_ht=float(t["ht"]), total_tva=float(t["tva"]), total_ttc=float(t["ttc"]))
     cols = ", ".join(vals)
     new_id = conn.execute(f"INSERT INTO documents ({cols}) VALUES ({', '.join('?' for _ in vals)})",
                           tuple(vals.values())).lastrowid
@@ -390,6 +396,18 @@ def generate_recurring(conn, today=None):
     if n:
         db.log(conn, "info", f"{n} dépense(s) récurrente(s) créée(s).")
     return n
+
+
+def delete_clients(conn, client_ids):
+    """Supprime les clients sans document ; ceux qui en ont sont retirés des listes (les factures restent)."""
+    out = {"deleted": 0, "archived": 0}
+    for cid in client_ids:
+        if conn.execute("SELECT 1 FROM documents WHERE client_id = ?", (cid,)).fetchone():
+            conn.execute("UPDATE clients SET archived = 1 WHERE id = ?", (cid,))
+            out["archived"] += 1
+        elif conn.execute("DELETE FROM clients WHERE id = ?", (cid,)).rowcount:
+            out["deleted"] += 1
+    return out
 
 
 def move_clients_to_suppliers(conn, client_ids):
