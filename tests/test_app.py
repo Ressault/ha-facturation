@@ -306,7 +306,7 @@ def test_monae_import(env, monkeypatch):
         if path.endswith("/purchases.json"):
             return Resp(purchases)
         if path.endswith("/recurring_purchases.json"):
-            return recurring
+            return Resp(recurring)
         if path.endswith(".pdf"):
             return Resp(content=b"%PDF-1.4 original")
         raise AssertionError(path)
@@ -444,3 +444,61 @@ def test_v2_features(env):
         r = c.get(url)
         assert r.status_code == 200, url
     conn.close()
+
+
+def test_v3_periods_avoirs_recurring(env):
+    appmod, db, client = env
+    import calc
+    import logic
+    today = date(2026, 11, 19)
+    # filtre période
+    assert appmod.period_range("12m", today=today) == ("2025-11-20", "2026-11-20")
+    assert appmod.period_range("m-2026-10", today=today) == ("2026-10-01", "2026-11-01")
+    assert appmod.period_range("t-2026-3", today=today) == ("2026-07-01", "2026-10-01")
+    assert appmod.period_range("a-2016", today=today) == ("2016-01-01", "2017-01-01")
+    groups = appmod.period_groups(today)
+    flat = [v for _, opts in groups for v, _ in opts]
+    assert flat[:3] == ["tout", "12m", "m-2026-11"] and "m-2026-01" in flat and "t-2026-4" in flat
+    assert "a-2026" in flat and "a-2016" in flat and flat[-1] == "perso"
+    assert appmod.period_choice("trimestre", today) == "t-2026-4"
+
+    conn = db.connect()
+    cid = conn.execute("INSERT INTO clients(kind, name) VALUES ('pro', 'Client T3')").lastrowid
+
+    def doc(kind, num, day, ht, status="emise", avoir_of=None):
+        i = conn.execute("INSERT INTO documents(kind, number, status, client_id, issue_date, total_ht, total_tva, total_ttc,"
+                         " imported, avoir_of_id, client_snapshot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                         (kind, num, status, cid, day, ht, ht * .2, ht * 1.2, avoir_of, '{"name": "Client T3"}')).lastrowid
+        conn.execute("INSERT INTO lines(document_id, position, designation, quantity, unit_price, vat_rate) "
+                     "VALUES (?, 1, 'x', 1, ?, 20)", (i, ht))
+        return i
+    f1 = doc("facture", "T3-1", "2025-07-02", 1000, "payee")
+    conn.execute("INSERT INTO payments(document_id, date, amount, pdp_reported) VALUES (?, '2025-07-10', 1200, 1)", (f1,))
+    doc("avoir", "T3-A1", "2025-08-03", 600)          # avoir importé, non rattaché : compte à sa date
+    f2 = doc("facture", "T3-2", "2025-08-05", 500, "annulee")
+    doc("avoir", "T3-A2", "2025-08-06", 500, avoir_of=f2)  # annulation d'une facture impayée : ne compte pas
+    conn.commit()
+    r = calc.compute_urssaf(conn, "2025-07-01", "2025-10-01", db.get_settings(conn))
+    assert r["ca"]["bnc"] == 400 and r["n_docs"] == 2, r
+    p = calc.compute_period(conn, "2025-08")
+    assert p["a1_base"] == -600, p["a1_base"]
+
+    # abonnement retrouvé dans les dépenses
+    for d_ in ("2026-08-23", "2026-09-23", "2026-10-23"):
+        conn.execute("INSERT INTO purchases(supplier, invoice_date, description, total_ht, total_tva, total_ttc, category,"
+                     " paid_date, method) VALUES ('Spotify ', ?, 'abonnement spotify', 9.27, 1.85, 11.12, 'biens_services', ?, 'paypal')",
+                     (d_, d_))
+    conn.commit()
+    assert logic.detect_recurring(conn, today) == 1
+    assert logic.detect_recurring(conn, today) == 0
+    rec = conn.execute("SELECT * FROM recurring_purchases ORDER BY id DESC").fetchone()
+    assert rec["next_date"] == "2026-11-23" and rec["every_months"] == 1 and rec["method"] == "paypal"
+    conn.close()
+
+    av = db.connect().execute("SELECT id FROM documents WHERE number='T3-A1'").fetchone()["id"]
+    for url in (f"/documents/{av}", "/documents?periode=t-2025-3&type=encaisse_le", "/documents?periode=12m",
+                "/achats?periode=a-2016", "/achats-recurrents", "/urssaf?p=2025-T3", "/"):
+        res = client.get(url)
+        assert res.status_code == 200, (url, res.status_code)
+    html = client.get("/documents?periode=t-2025-3&type=encaisse_le").get_data(as_text=True)
+    assert "T3-A1" in html and "T3-1" in html and "T3-A2" not in html

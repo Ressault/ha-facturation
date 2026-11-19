@@ -409,6 +409,52 @@ def move_clients_to_suppliers(conn, client_ids):
     return moved
 
 
+def detect_recurring(conn, today=None):
+    """Repère les abonnements dans l'historique des dépenses (même fournisseur, même montant, à intervalle
+    régulier : mensuel, trimestriel, annuel) et crée les achats récurrents correspondants s'ils n'existent pas."""
+    today = today or date.today()
+    rows = conn.execute(
+        "SELECT p.*, COALESCE(s.name, p.supplier) AS sname FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplier_id "
+        "WHERE p.invoice_date IS NOT NULL AND p.total_ttc > 0 ORDER BY p.invoice_date, p.id").fetchall()
+    groups = {}
+    for r in rows:
+        who = r["supplier_id"] or (r["sname"] or "").strip().lower()
+        if not who:
+            continue
+        groups.setdefault((who, round(r["total_ttc"], 2)), []).append(r)
+    created = 0
+    for (who, ttc), items in groups.items():
+        dates = [date.fromisoformat(i["invoice_date"][:10]) for i in items]
+        gaps = [(b - a).days for a, b in zip(dates, dates[1:])]
+        months = None
+        for m, lo, hi, need in ((1, 26, 35, 2), (3, 84, 97, 2), (12, 355, 376, 1)):
+            if len(gaps) >= need and all(lo <= g <= hi for g in gaps[-need:]):
+                months = m
+                break
+        if not months:
+            continue
+        last = items[-1]
+        if (today - dates[-1]).days > months * 31 + 25:
+            continue  # abonnement arrêté
+        sid = last["supplier_id"] or supplier_id_for(conn, last["sname"])
+        if conn.execute("SELECT 1 FROM recurring_purchases WHERE supplier_id = ? AND abs(total_ttc - ?) < 0.01",
+                        (sid, ttc)).fetchone():
+            continue
+        nxt = add_months(last["invoice_date"], months)
+        rid = conn.execute(
+            "INSERT INTO recurring_purchases(supplier_id, title, total_ht, total_tva, total_ttc, category, nature, method,"
+            " every_months, next_date, occurrences, auto_paid, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            (sid, (last["description"] or last["sname"] or "Abonnement").strip(), last["total_ht"], last["total_tva"],
+             last["total_ttc"], last["category"] or "biens_services", last["nature"] or "services", last["method"],
+             months, nxt, len(items), 1 if all(i["paid_date"] for i in items) else 0)).lastrowid
+        conn.execute(f"UPDATE purchases SET recurring_id = ? WHERE id IN ({','.join(str(i['id']) for i in items)})",
+                     (rid,))
+        created += 1
+    if created:
+        db.log(conn, "info", f"{created} abonnement(s) détecté(s) dans les dépenses.")
+    return created
+
+
 def supplier_id_for(conn, name, siren=None):
     name = (name or "").strip() or "Fournisseur"
     row = None

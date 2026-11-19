@@ -28,7 +28,7 @@
     </select></div>
     {% endif %}
     <div><label>Période</label><select name="periode" id="periode" onchange="this.form.submit()">
-      {% for v, l in PERIODS %}<option value="{{ v }}" {{ 'selected' if f.periode == v }}>{{ l }}</option>{% endfor %}
+      {% include "_periods.html" %}
     </select></div>
     {% if f.periode == 'perso' %}
     <div><label>Du</label><input type="date" name="du" value="{{ f.du }}"></div>
@@ -47,6 +47,7 @@
     {% if tot.enc %}<div>Encaissé sur la période<b style="color:var(--accent)">{{ tot.enc|money }}</b></div>{% endif %}
   </div>
   {% if docs %}
+  {% if not is_devis %}<div class="legend-rows"><span><i style="background:var(--green)"></i>Brouillon</span><span><i style="background:var(--orange)"></i>En retard</span></div>{% endif %}
   <table class="list">
     <tr><th>N°</th><th class="hide-m">Date</th><th>Client · objet</th><th class="n hide-m">HT</th><th class="n">TTC</th>
       <th class="hide-m">{{ 'Validité' if is_devis else 'Échéance' }}</th><th class="n">{{ 'Statut' if is_devis else 'Payé' }}</th></tr>
@@ -64,7 +65,7 @@
       <td class="n">
         {% if is_devis or x.status in ('brouillon', 'annulee') %}<span class="pill {{ STATUS[x.status][1] }}">{{ STATUS[x.status][0] }}</span>
         {% elif x.status == 'payee' or x.status == 'rembourse' %}{{ x.paid_on|date }}
-        {% elif x.late %}<span class="pill red">En retard</span>
+        {% elif x.late %}<span class="pill orange">En retard</span>
         {% elif x.status == 'partielle' %}<span class="pill amber">Partiel</span>
         {% else %}<span class="muted">—</span>{% endif %}
       </td>

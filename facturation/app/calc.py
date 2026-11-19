@@ -8,6 +8,7 @@ Règles retenues (prestations de services, régime réel normal mensuel) :
   (date de paiement pour les services achetés, date de facture pour les biens).
 - Les montants de la CA3 se saisissent en euros entiers (arrondi au plus proche).
 """
+import json
 from collections import OrderedDict
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
@@ -192,6 +193,51 @@ def next_period(period: str) -> str:
     return f"{y:04d}-{m:02d}"
 
 
+def avoir_imputed(conn, avoir) -> Decimal:
+    """Part d'un avoir sans remboursement enregistré qui vient en déduction du chiffre d'affaires encaissé.
+
+    Un avoir non rattaché (import MonAE) compte en entier à sa date, comme dans MonAE. Rattaché à une facture,
+    il ne compte que pour ce qui avait déjà été encaissé : annuler une facture impayée ne fait rien baisser."""
+    total = money(avoir["total_ttc"])
+    if not avoir["avoir_of_id"]:
+        return total
+    inv = conn.execute("SELECT total_ttc FROM documents WHERE id = ?", (avoir["avoir_of_id"],)).fetchone()
+    if not inv:
+        return total
+    paid = money(conn.execute("SELECT COALESCE(SUM(amount), 0) s FROM payments WHERE document_id = ?",
+                              (avoir["avoir_of_id"],)).fetchone()["s"])
+    others = conn.execute(
+        "SELECT id, total_ttc FROM documents WHERE avoir_of_id = ? AND kind = 'avoir' AND status != 'brouillon' "
+        "ORDER BY issue_date, id", (avoir["avoir_of_id"],)).fetchall()
+    excess = paid + sum((money(o["total_ttc"]) for o in others), Decimal("0")) - money(inv["total_ttc"])
+    for o in others:
+        part = max(Decimal("0"), min(money(o["total_ttc"]), excess))
+        if o["id"] == avoir["id"]:
+            return part
+        excess -= part
+    return Decimal("0")
+
+
+def cash_rows(conn, start: str, end: str):
+    """Mouvements encaissés entre start (inclus) et end (exclu) : règlements des factures et des avoirs, plus les
+    avoirs sans remboursement enregistré, pris à leur date d'émission. `amount` est toujours positif."""
+    rows = [dict(r) for r in conn.execute(
+        """SELECT p.id, p.date, p.amount, d.id AS doc_id, d.kind, d.number, d.client_snapshot, d.total_ht, d.total_ttc
+           FROM payments p JOIN documents d ON d.id = p.document_id
+           WHERE p.date >= ? AND p.date < ? AND d.kind IN ('facture', 'avoir')""", (start, end)).fetchall()]
+    for a in conn.execute(
+            """SELECT a.* FROM documents a WHERE a.kind = 'avoir' AND a.status NOT IN ('brouillon')
+               AND a.issue_date >= ? AND a.issue_date < ?
+               AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.document_id = a.id)""", (start, end)).fetchall():
+        amt = avoir_imputed(conn, a)
+        if amt > 0:
+            rows.append({"id": None, "date": a["issue_date"], "amount": float(amt), "doc_id": a["id"], "kind": "avoir",
+                         "number": a["number"], "client_snapshot": a["client_snapshot"], "total_ht": a["total_ht"],
+                         "total_ttc": a["total_ttc"]})
+    rows.sort(key=lambda r: (r["date"] or "", r["id"] or 0))
+    return rows
+
+
 def compute_period(conn, period: str):
     """Calcule la TVA du mois `period` (YYYY-MM) à partir de la base."""
     start, end = month_bounds(period)
@@ -199,13 +245,7 @@ def compute_period(conn, period: str):
     # --- TVA collectée sur encaissements
     by_rate = OrderedDict()
     details = []
-    rows = conn.execute(
-        """SELECT p.id, p.date, p.amount, d.id AS doc_id, d.kind, d.number, d.client_snapshot
-           FROM payments p JOIN documents d ON d.id = p.document_id
-           WHERE p.date >= ? AND p.date < ? AND d.kind IN ('facture', 'avoir')
-           ORDER BY p.date, p.id""",
-        (start, end),
-    ).fetchall()
+    rows = cash_rows(conn, start, end)
     debours = Decimal("0")
     for r in rows:
         lines = conn.execute(
@@ -339,16 +379,24 @@ def shift_quarter(q: str, delta: int) -> str:
 def compute_urssaf(conn, start: str, end: str, settings: dict):
     """Chiffre d'affaires encaissé HT par nature entre start (inclus) et end (exclu), et cotisations estimées."""
     ca = OrderedDict((k, Decimal("0")) for k in NATURES)
-    rows = conn.execute(
-        """SELECT p.amount, d.id AS doc_id, d.kind FROM payments p JOIN documents d ON d.id = p.document_id
-           WHERE p.date >= ? AND p.date < ? AND d.kind IN ('facture', 'avoir')""", (start, end)).fetchall()
+    rows = cash_rows(conn, start, end)
+    docs = []
     for r in rows:
         lines = conn.execute("SELECT quantity, unit_price, vat_rate, kind, nature FROM lines WHERE document_id = ?",
                              (r["doc_id"],)).fetchall()
         sign = Decimal("-1") if r["kind"] == "avoir" else Decimal("1")
+        ht = Decimal("0")
         for nature, rate, base, tva in split_payment_by_nature(r["amount"], nature_breakdown(
                 lines, settings.get("default_nature") or "bnc")):
             ca[nature if nature in ca else "bnc"] += sign * (base if nature != "debours" else base + tva)
+            if nature != "debours":
+                ht += sign * base
+        try:
+            client = (json.loads(r["client_snapshot"] or "{}") or {}).get("name") or ""
+        except (TypeError, ValueError):
+            client = ""
+        docs.append({"date": r["date"], "number": r["number"], "kind": r["kind"], "doc_id": r["doc_id"],
+                     "client": client, "ht": float(ht), "ttc": float(sign * money(r["amount"]))})
     vl = settings.get("versement_liberatoire") == "1"
     lines_out, total = [], Decimal("0")
     for key, label in (("vente", "Ventes de marchandises"), ("bic", "Prestations commerciales ou artisanales"),
@@ -370,4 +418,4 @@ def compute_urssaf(conn, start: str, end: str, settings: dict):
                       "rate": cfp_rate, "amount": cfp})
     total += cfp
     return {"ca": {k: euros(v) for k, v in ca.items()}, "ca_exact": ca, "lines": lines_out, "total": int(total),
-            "n_payments": len(rows)}
+            "n_payments": len(rows), "docs": docs, "n_docs": len({x["doc_id"] for x in docs})}

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="head"><h1>Achats récurrents</h1><span class="spacer"></span>
+  <form method="post" action="{{ url_for('recurring_detect') }}"><button>Détecter dans mes dépenses</button></form>
   <a class="btn primary" href="{{ url_for('recurring_form') }}">＋ Achat récurrent</a></div>
 <p class="muted small" style="margin-top:-8px">Abonnements et frais réguliers : la dépense est créée automatiquement à chaque échéance.</p>
 <div class="card tight">
@@ -19,6 +20,6 @@
     </tr>
     {% endfor %}
   </table>
-  {% else %}<div class="empty"><div class="big">🔁</div>Aucun achat récurrent.</div>{% endif %}
+  {% else %}<div class="empty"><div class="big">🔁</div>Aucun achat récurrent.<div class="small" style="margin-top:6px">« Détecter dans mes dépenses » retrouve vos abonnements (même fournisseur, même montant, chaque mois).</div></div>{% endif %}
 </div>
 {% endblock %}

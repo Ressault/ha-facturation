@@ -388,8 +388,14 @@ def import_purchase(conn, p, supplier_map, report):
     ttc = money(p.get("total_with_vat") or 0)
     tva = money(p.get("vat_amount") or 0)
     ht = money(p.get("total")) if p.get("total") is not None else ttc - tva
+    twin = conn.execute("SELECT id FROM purchases WHERE monae_id IS NULL AND source = 'recurrent' AND invoice_date = ?"
+                        " AND abs(total_ttc - ?) < 0.01", (p.get("invoiced_on"), float(ttc))).fetchone()
+    if twin:
+        conn.execute("UPDATE purchases SET monae_id = ? WHERE id = ?", (p.get("id"), twin["id"]))
+        report["skipped"] += 1
+        return
     sid = supplier_map.get(p.get("supplier_id"))
-    sname = p.get("supplier_identity") or ""
+    sname = (p.get("supplier_identity") or "").strip()
     if sid:
         sname = conn.execute("SELECT name FROM suppliers WHERE id = ?", (sid,)).fetchone()["name"]
     elif sname:
@@ -507,10 +513,15 @@ def _run(api, firm_id, with_pdfs):
         purchases = []
         for page in api.pages(f"/firms/{firm_id}/purchases.json"):
             purchases += page
-        try:
-            recurring = list(api.get(f"/firms/{firm_id}/recurring_purchases.json") or [])
-        except MonAEError:
-            recurring = []
+        recurring = []
+        for path in (f"/firms/{firm_id}/recurring_purchases.json", f"/firms/{firm_id}/purchases/recurring.json"):
+            try:
+                for page in api.pages(path):
+                    recurring += [x for x in (page if isinstance(page, list) else []) if isinstance(x, dict)]
+                if recurring:
+                    break
+            except MonAEError:
+                continue
         work = [("facture", i) for i in invoices] + [("devis", q) for q in quotes]
         total = len(work) + len(purchases)
         set_job(total=total, step=f"{len(invoices)} factures, {len(quotes)} devis, {len(purchases)} achats…")
@@ -527,7 +538,12 @@ def _run(api, firm_id, with_pdfs):
             import_purchase(conn, p, supplier_map, report)
             n += 1
         for r in recurring:
-            import_recurring(conn, r, supplier_map, report)
+            try:
+                import_recurring(conn, r, supplier_map, report)
+            except Exception as e:  # format inconnu : la détection ci-dessous prend le relais
+                db.log(conn, "warning", f"Achat récurrent MonAE ignoré : {e}")
+        import logic
+        report["recurring"] += logic.detect_recurring(conn)
         conn.commit()
         set_job(done=total, step="Finalisation…")
         numbering = detect_numbering(report["refs"]) if report["refs"] else None

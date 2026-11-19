@@ -5,7 +5,7 @@
 <div class="card" id="job" {% if not job or not job.status %}style="display:none"{% endif %}>
   <h2>Import depuis MonAE</h2>
   <div id="job-step" class="muted">{{ job.step if job else '' }}</div>
-  <div style="background:var(--bg); border-radius:99px; height:10px; margin:10px 0; overflow:hidden">
+  <div style="background:var(--fill-2); border-radius:99px; height:10px; margin:10px 0; overflow:hidden">
     <div id="job-bar" style="height:10px; background:var(--accent); width:0%"></div></div>
   <div id="job-result"></div>
 </div>

@@ -6,16 +6,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Facturation{% endblock %}</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=20">
+<script>try { document.documentElement.dataset.theme = localStorage.getItem('factu-theme') || 'dark'; } catch (e) { document.documentElement.dataset.theme = 'dark'; }</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=30">
 </head>
 <body>
 <header class="top"><div class="inner">
   <div class="histnav">
-    <button type="button" onclick="history.back()" title="Page précédente" aria-label="Page précédente">‹</button>
-    <button type="button" onclick="history.forward()" title="Page suivante" aria-label="Page suivante">›</button>
+    <button type="button" class="round" onclick="history.back()" title="Page précédente" aria-label="Page précédente">‹</button>
+    <button type="button" class="round" onclick="history.forward()" title="Page suivante" aria-label="Page suivante">›</button>
   </div>
   <a class="brand" href="{{ url_for('index') }}"><span class="logo">€</span><span class="hide-m">Facturation</span></a>
-  <button type="button" class="burger icon" onclick="document.querySelector('.menu').classList.toggle('show')">☰</button>
+  <button type="button" class="burger round" onclick="document.querySelector('.menu').classList.toggle('show')">☰</button>
   <nav class="menu">
     <div class="item {{ 'on' if ep == 'index' }}"><a href="{{ url_for('index') }}">Accueil</a></div>
     <div class="item {{ 'on' if ep in ('documents','doc_view','doc_edit','doc_new','clients','client_form') }}">
@@ -65,6 +66,7 @@
       </div>
     </div>
   </nav>
+  <button type="button" class="round" id="theme" title="Mode clair / sombre" aria-label="Mode clair / sombre"></button>
 </div></header>
 
 {% if tasks and ep != 'index' %}
@@ -102,6 +104,15 @@ document.querySelectorAll('form.task-check').forEach(f => f.addEventListener('su
   await fetch(f.action, {method: 'POST', headers: {'X-Requested-With': 'fetch'}, body: new FormData(f)});
   const t = f.closest('.task'); t.classList.add('hide'); setTimeout(() => t.remove(), 300);
 }));
+// thème clair / sombre (sombre par défaut, comme le tableau de bord Maison)
+const themeBtn = document.getElementById('theme');
+function paintTheme() { themeBtn.textContent = document.documentElement.dataset.theme === 'light' ? '☾' : '☀'; }
+themeBtn.addEventListener('click', () => {
+  const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = t; try { localStorage.setItem('factu-theme', t); } catch (e) {}
+  paintTheme();
+});
+paintTheme();
 // mode HT / TTC mémorisé
 const MODE_KEY = 'factu-mode';
 function setMode(m) {

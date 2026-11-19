@@ -43,9 +43,20 @@ STATUS = {
 }
 KIND_LABEL = {"facture": "Facture", "devis": "Devis", "avoir": "Avoir"}
 TERMS = dict(PAYMENT_TERMS)
-PERIODS = [("mois", "Ce mois-ci"), ("mois-1", "Mois dernier"), ("trimestre", "Ce trimestre"),
-           ("trimestre-1", "Trimestre dernier"), ("annee", "Cette année"), ("annee-1", "Année dernière"),
-           ("tout", "Tout"), ("perso", "Personnalisée")]
+FIRST_YEAR = 2016
+
+
+def period_groups(today=None):
+    """Choix du filtre Période, groupés comme dans MonAE : mois de l'année, trimestres, années."""
+    today = today or date.today()
+    y = today.year
+    return [
+        ("", [("tout", "Indifférent"), ("12m", "12 derniers mois")]),
+        (f"Mois {y}", [(f"m-{y}-{m:02d}", MOIS[m - 1].capitalize()) for m in range(today.month, 0, -1)]),
+        (f"Trimestres {y}", [(f"t-{y}-{q}", f"T{q} {y}") for q in range(1, 5)]),
+        ("Années", [(f"a-{a}", str(a)) for a in range(y, min(FIRST_YEAR, y) - 1, -1)]),
+        ("", [("perso", "Personnalisée…")]),
+    ]
 
 
 def period_label(period):
@@ -59,6 +70,20 @@ def period_range(code, start=None, end=None, today=None):
     """(début inclus, fin exclue) au format ISO pour un code de période."""
     today = today or date.today()
     y, m = today.year, today.month
+    code = code or "tout"
+    if code == "12m":
+        try:
+            s_ = today.replace(year=y - 1)
+        except ValueError:  # 29 février
+            s_ = today.replace(year=y - 1, day=28)
+        return (s_ + timedelta(days=1)).isoformat(), (today + timedelta(days=1)).isoformat()
+    if code.startswith("m-") and len(code) == 9:
+        return calc.month_bounds(code[2:])
+    if code.startswith("t-") and len(code) == 8:
+        return calc.quarter_bounds(f"{code[2:6]}-T{code[7]}")
+    if code.startswith("a-") and code[2:].isdigit():
+        a = int(code[2:])
+        return f"{a:04d}-01-01", f"{a + 1:04d}-01-01"
     if code == "mois":
         return calc.month_bounds(f"{y:04d}-{m:02d}")
     if code == "mois-1":
@@ -77,8 +102,28 @@ def period_range(code, start=None, end=None, today=None):
     return "0000-01-01", "9999-12-31"
 
 
+def period_choice(code, today=None):
+    """Ramène les anciens codes (mois, trimestre…) sur une entrée de la liste."""
+    today = today or date.today()
+    y, m = today.year, today.month
+    if code == "mois":
+        return f"m-{y}-{m:02d}"
+    if code == "trimestre":
+        return f"t-{y}-{(m - 1) // 3 + 1}"
+    if code == "annee":
+        return f"a-{y}"
+    if code == "annee-1":
+        return f"a-{y - 1}"
+    if code == "mois-1":
+        return "m-" + calc.previous_period(today)
+    if code == "trimestre-1":
+        q = calc.previous_quarter(today)
+        return f"t-{q[:4]}-{q[-1]}"
+    return code
+
+
 app.jinja_env.globals.update(STATUS=STATUS, KIND_LABEL=KIND_LABEL, period_label=period_label, NATURES=NATURES,
-                             TERMS=TERMS, PAYMENT_TERMS=PAYMENT_TERMS, PERIODS=PERIODS, MOIS_COURT=MOIS_COURT)
+                             TERMS=TERMS, PAYMENT_TERMS=PAYMENT_TERMS, period_groups=period_groups, MOIS_COURT=MOIS_COURT)
 
 
 class IngressMiddleware:
@@ -131,12 +176,12 @@ def business_error(e):
 
 def sums(c, start, end):
     """Encaissé, facturé, achats (HT et TTC) entre start et end."""
-    enc = c.execute(
-        "SELECT COALESCE(SUM(CASE WHEN d.kind='avoir' THEN -p.amount ELSE p.amount END),0) ttc, "
-        "COALESCE(SUM(CASE WHEN d.kind='avoir' THEN -1 ELSE 1 END * p.amount * "
-        "CASE WHEN d.total_ttc != 0 THEN d.total_ht / d.total_ttc ELSE 1 END),0) ht "
-        "FROM payments p JOIN documents d ON d.id = p.document_id "
-        "WHERE d.kind IN ('facture','avoir') AND p.date >= ? AND p.date < ?", (start, end)).fetchone()
+    enc = {"ht": 0.0, "ttc": 0.0}
+    for r in calc.cash_rows(c, start, end):
+        sign = -1 if r["kind"] == "avoir" else 1
+        ratio = (r["total_ht"] / r["total_ttc"]) if r["total_ttc"] else 1
+        enc["ttc"] += sign * r["amount"]
+        enc["ht"] += sign * r["amount"] * ratio
     fac = c.execute(
         "SELECT COALESCE(SUM(CASE WHEN kind='avoir' THEN -total_ttc ELSE total_ttc END),0) ttc, "
         "COALESCE(SUM(CASE WHEN kind='avoir' THEN -total_ht ELSE total_ht END),0) ht FROM documents "
@@ -144,7 +189,7 @@ def sums(c, start, end):
         (start, end)).fetchone()
     ach = c.execute("SELECT COALESCE(SUM(total_ttc),0) ttc, COALESCE(SUM(total_ht),0) ht FROM purchases "
                     "WHERE invoice_date >= ? AND invoice_date < ?", (start, end)).fetchone()
-    return {"enc": {"ht": enc["ht"], "ttc": enc["ttc"]}, "fac": {"ht": fac["ht"], "ttc": fac["ttc"]},
+    return {"enc": enc, "fac": {"ht": fac["ht"], "ttc": fac["ttc"]},
             "ach": {"ht": ach["ht"], "ttc": ach["ttc"]}}
 
 
@@ -317,7 +362,7 @@ def api_siren(siren):
 def doc_filters(args, kind):
     return {
         "statut": args.get("statut", ""), "type": args.get("type", "facture_le"),
-        "periode": args.get("periode", "tout"),
+        "periode": period_choice(args.get("periode", "tout")),
         "du": args.get("du", ""), "au": args.get("au", ""), "q": (args.get("q") or "").strip(),
     }
 
@@ -334,10 +379,11 @@ def query_documents(c, kind, f):
     args = list(kinds)
     if f["periode"] != "tout":
         if f["type"] == "encaisse_le" and kind == "facture":
-            sql += " AND EXISTS (SELECT 1 FROM payments p WHERE p.document_id=d.id AND p.date >= ? AND p.date < ?)"
+            ids = sorted({r["doc_id"] for r in calc.cash_rows(c, start, end)}) or [0]
+            sql += f" AND d.id IN ({','.join(str(int(i)) for i in ids)})"
         else:
             sql += " AND COALESCE(d.issue_date, '') >= ? AND COALESCE(d.issue_date, '') < ?"
-        args += [start, end]
+            args += [start, end]
     st = f["statut"]
     today = date.today().isoformat()
     if st == "brouillons":
@@ -376,9 +422,8 @@ def query_documents(c, kind, f):
         tot["ttc"] += sign * d(r["total_ttc"])
         tot["rest"] += d(r["rest"])
     if f["type"] == "encaisse_le" and f["periode"] != "tout" and kind == "facture":
-        tot["enc"] = d(c.execute(
-            "SELECT COALESCE(SUM(CASE WHEN d.kind='avoir' THEN -p.amount ELSE p.amount END),0) s FROM payments p "
-            "JOIN documents d ON d.id=p.document_id WHERE p.date >= ? AND p.date < ?", (start, end)).fetchone()["s"])
+        tot["enc"] = sum((d(-r["amount"] if r["kind"] == "avoir" else r["amount"])
+                          for r in calc.cash_rows(c, start, end)), d(0))
     return rows, tot
 
 
@@ -529,6 +574,7 @@ def doc_view(doc_id):
         invoices_from = c.execute("SELECT id, number, status FROM documents WHERE source_devis_id=?",
                                   (doc_id,)).fetchall()
         remaining = money(doc["total_ttc"]) - paid - money(credited)
+        avoir_rest = money(doc["total_ttc"]) - paid
         prev, nxt = logic.neighbours(c, doc)
         running = d(0)
         shown = []
@@ -541,7 +587,7 @@ def doc_view(doc_id):
                 running = d(0)
             shown.append(ln)
         return render_template("doc_view.html", doc=doc, lines=shown, client=client, t=t, payments=payments,
-                               paid=paid, credited=credited, remaining=remaining, avoirs=avoirs, origin=origin,
+                               paid=paid, credited=credited, remaining=remaining, avoir_rest=avoir_rest, avoirs=avoirs, origin=origin,
                                invoices_from=invoices_from, prev=prev, nxt=nxt)
     finally:
         c.close()
@@ -697,7 +743,7 @@ def payment_delete(payment_id):
 # -- achats : dépenses, fournisseurs, récurrents --------------------------------
 
 def purchase_filters(args):
-    return {"periode": args.get("periode", "annee"), "du": args.get("du", ""), "au": args.get("au", ""),
+    return {"periode": period_choice(args.get("periode", "annee")), "du": args.get("du", ""), "au": args.get("au", ""),
             "type": args.get("type", "facture_le"), "statut": args.get("statut", ""),
             "q": (args.get("q") or "").strip()}
 
@@ -895,6 +941,19 @@ def recurring():
         tot = {"ht": sum(r["total_ht"] / (r["every_months"] or 1) for r in rows if r["active"]),
                "ttc": sum(r["total_ttc"] / (r["every_months"] or 1) for r in rows if r["active"])}
         return render_template("recurring.html", rows=rows, tot=tot)
+    finally:
+        c.close()
+
+
+@app.route("/achats-recurrents/detecter", methods=["POST"])
+def recurring_detect():
+    c = conn()
+    try:
+        n = logic.detect_recurring(c)
+        c.commit()
+        flash(f"{n} abonnement(s) trouvé(s) dans vos dépenses." if n else
+              "Aucun nouvel abonnement trouvé dans vos dépenses.")
+        return redirect(url_for("recurring"))
     finally:
         c.close()
 
@@ -1214,6 +1273,16 @@ def background_sync():
 
 def main():
     db.init_db()
+    c = conn()
+    try:  # une seule fois : retrouver les abonnements déjà présents dans les dépenses importées
+        if db.get_settings(c).get("recurring_scan") != "1":
+            logic.detect_recurring(c)
+            db.set_settings({"recurring_scan": "1"}, c)
+            c.commit()
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        c.close()
     threading.Thread(target=background_sync, daemon=True).start()
     from waitress import serve
     serve(app, host="0.0.0.0", port=int(os.environ.get("FACTU_PORT", "8099")), threads=6)

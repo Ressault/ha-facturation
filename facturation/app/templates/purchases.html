@@ -15,7 +15,7 @@
       <option value="facture_le" {{ 'selected' if f.type == 'facture_le' }}>Facturé en</option>
       <option value="paye_le" {{ 'selected' if f.type == 'paye_le' }}>Payé en</option></select></div>
     <div><label>Période</label><select name="periode" onchange="this.form.submit()">
-      {% for v, l in PERIODS %}<option value="{{ v }}" {{ 'selected' if f.periode == v }}>{{ l }}</option>{% endfor %}</select></div>
+      {% include "_periods.html" %}</select></div>
     {% if f.periode == 'perso' %}
     <div><label>Du</label><input type="date" name="du" value="{{ f.du }}"></div>
     <div><label>Au</label><input type="date" name="au" value="{{ f.au }}"></div>

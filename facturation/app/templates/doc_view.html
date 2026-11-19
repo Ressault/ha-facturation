@@ -128,7 +128,7 @@
       <form method="post" action="{{ url_for('doc_payment', doc_id=doc.id) }}" style="margin-top:12px">
         <div class="fields" style="grid-template-columns:1fr 1fr; margin-bottom:8px">
           <div><label>Date</label><input type="date" name="date" value="{{ today }}"></div>
-          <div><label>Montant TTC</label><input name="amount" inputmode="decimal" value="{{ ('%.2f' % (remaining if is_inv else doc.total_ttc - paid))|replace('.', ',') }}"></div>
+          <div><label>Montant TTC</label><input name="amount" inputmode="decimal" value="{{ ('%.2f' % (remaining if is_inv else avoir_rest))|replace('.', ',') }}"></div>
         </div>
         <select name="method" style="margin-bottom:10px">{% for m in ['virement', 'chèque', 'carte', 'prélèvement', 'espèces', 'autre'] %}<option>{{ m }}</option>{% endfor %}</select>
         <button class="primary" style="width:100%; justify-content:center">{{ 'Marquer remboursé' if doc.kind == 'avoir' else 'Marquer payée' }}</button>

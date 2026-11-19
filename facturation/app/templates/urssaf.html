@@ -31,6 +31,22 @@
     </table>
   </div>
 </div>
+<div class="card tight">
+  <div class="summary">
+    <div>Nombre de factures<b>{{ r.n_docs }}</b></div>
+    <div>Chiffre d'affaires HT<b>{{ r.docs|sum(attribute='ht')|money }}</b></div>
+    <div>Encaissé TTC<b>{{ r.docs|sum(attribute='ttc')|money }}</b></div>
+  </div>
+  <table class="list">
+    <tr><th>Date</th><th>N°</th><th>Client</th><th class="n hide-m">HT</th><th class="n">TTC</th></tr>
+    {% for x in r.docs %}
+    <tr class="click" data-href="{{ url_for('doc_view', doc_id=x.doc_id) }}">
+      <td>{{ x.date|date }}</td><td class="t">{{ x.number }}{% if x.kind == 'avoir' %} <span class="pill grey">Avoir</span>{% endif %}</td>
+      <td>{{ x.client }}</td><td class="n hide-m {{ 'neg' if x.ht < 0 }}">{{ x.ht|money }}</td>
+      <td class="n t {{ 'neg' if x.ttc < 0 }}">{{ x.ttc|money }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">Aucun encaissement sur la période.</td></tr>{% endfor %}
+  </table>
+</div>
 <form method="post" action="{{ url_for('task_toggle', task_id='urssaf:' ~ period) }}">
   {% if done %}<input type="hidden" name="undo" value="1"><button class="small">Annuler « déclaré »</button>
   {% else %}<button class="green">✓ J'ai déclaré ce chiffre d'affaires</button>{% endif %}

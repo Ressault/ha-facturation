@@ -1,0 +1,1 @@
+{% for g, opts in period_groups() %}{% if g %}<optgroup label="{{ g }}">{% endif %}{% for v, l in opts %}<option value="{{ v }}" {{ 'selected' if f.periode == v }}>{{ l }}</option>{% endfor %}{% if g %}</optgroup>{% endif %}{% endfor %}
