@@ -668,6 +668,40 @@ def api_debug_pdp():
         c.close()
 
 
+@app.route("/api/debug/validation")
+def api_debug_validation():
+    """Construit une facture fictive (non enregistrée), la convertit en Factur-X et la fait valider."""
+    import tempfile
+    from pdf import build_pdf
+    c = conn()
+    try:
+        seller = logic.snapshot_seller(c)
+        client = {"kind": "pro", "name": "Client Test SARL", "siren": "552081317", "vat_number": "FR03552081317",
+                  "address": "22-30 avenue de Wagram", "post_code": "75008", "city": "Paris", "country": "FR"}
+        doc = {"id": 0, "kind": "facture", "number": "TEST-0001", "issue_date": date.today().isoformat(),
+               "due_date": (date.today() + timedelta(days=30)).isoformat(), "subject": "Facture de test",
+               "notes": None, "service_date": None}
+        lines = [{"designation": "Prestation de test", "description": "", "quantity": 2, "unit": "h",
+                  "unit_price": 60, "vat_rate": 20},
+                 {"designation": "Frais", "description": "", "quantity": 1, "unit": "u", "unit_price": 15.5,
+                  "vat_rate": 10}]
+        path = os.path.join(tempfile.gettempdir(), "test-facture.pdf")
+        build_pdf(doc, lines, seller, client, path)
+        en = superpdp.build_en_invoice(doc, lines, seller, client, {})
+        api = logic.pdp_client(c)
+        out = {"en_invoice": en}
+        try:
+            with open(path, "rb") as f:
+                fx = api.to_facturx(db.dumps(en), f.read())
+            out["facturx_bytes"] = len(fx)
+            out["validation"] = api.validate(fx)
+        except Exception as e:  # noqa: BLE001
+            out["error"] = str(e)
+        return jsonify(out)
+    finally:
+        c.close()
+
+
 @app.route("/sante")
 def health():
     return jsonify({"ok": True})
