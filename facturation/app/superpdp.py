@@ -139,6 +139,17 @@ class Client:
         return self._req("GET", f"/v1.beta/invoices/{invoice_id}", expect_json=False,
                          params={"format": fmt})
 
+    def generate_test_invoice(self, fmt="cii"):
+        return self._req("GET", "/v1.beta/invoices/generate_test_invoice", expect_json=False,
+                         params={"format": fmt})
+
+    def convert_to_en(self, xml: bytes, fmt="cii"):
+        return self._req("POST", "/v1.beta/invoices/convert", params={"from": fmt, "to": "en16931"},
+                         data=xml, headers={"Content-Type": "application/xml"})
+
+    def get_invoice(self, invoice_id):
+        return self._req("GET", f"/v1.beta/invoices/{invoice_id}")
+
     def b2c_transactions(self, rows):
         return self._req("POST", "/v1.beta/b2c_transactions", json={"data": rows})
 

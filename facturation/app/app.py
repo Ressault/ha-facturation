@@ -702,6 +702,86 @@ def api_debug_validation():
         c.close()
 
 
+@app.route("/api/debug/sandbox-e2e")
+def api_debug_sandbox_e2e():
+    """Envoi réel en bac à sable : facture fictive (non enregistrée) -> client de test -> statut Encaissée."""
+    import tempfile
+    from pdf import build_pdf
+    c = conn()
+    steps = []
+    try:
+        api = logic.pdp_client(c)
+        me = api.me()
+        if me.get("env") != "sandbox":
+            return jsonify({"error": "Refusé : identifiants de production. Ce test ne tourne qu'en bac à sable."}), 400
+        steps.append(f"Entreprise de test : {me.get('formal_name')} ({me.get('number')})")
+        tpl = api.convert_to_en(api.generate_test_invoice("cii"))
+        steps.append("Facture modèle du bac à sable récupérée")
+        seller = logic.snapshot_seller(c)
+        seller.update({"company_name": me.get("formal_name") or seller["company_name"],
+                       "address": me.get("address") or seller["address"], "post_code": me.get("postcode") or "",
+                       "city": me.get("city") or "", "siren": me.get("number"), "siret": "",
+                       "vat_number": (tpl.get("seller") or {}).get("vat_identifier") or ""})
+        b = tpl.get("buyer") or {}
+        pa = b.get("postal_address") or {}
+        client = {"kind": "pro", "name": b.get("name"), "address": pa.get("address_line1", ""),
+                  "post_code": pa.get("post_code", ""), "city": pa.get("city", ""),
+                  "country": pa.get("country_code", "FR"),
+                  "siren": (b.get("legal_registration_identifier") or {}).get("value", ""),
+                  "vat_number": b.get("vat_identifier") or ""}
+        num = f"TEST-{int(time.time())}"
+        doc = {"id": 0, "kind": "facture", "number": num, "issue_date": date.today().isoformat(),
+               "due_date": (date.today() + timedelta(days=30)).isoformat(), "subject": "Test bout en bout",
+               "notes": None, "service_date": None}
+        lines = [{"designation": "Prestation de test", "description": "", "quantity": 2, "unit": "h",
+                  "unit_price": 60, "vat_rate": 20},
+                 {"designation": "Frais", "description": "", "quantity": 1, "unit": "u", "unit_price": 15.5,
+                  "vat_rate": 10}]
+        en = superpdp.build_en_invoice(doc, lines, seller, client, {})
+        # identifiants du bac à sable (schémas spécifiques)
+        for k in ("electronic_address", "legal_registration_identifier", "identifiers"):
+            if (tpl.get("seller") or {}).get(k):
+                en["seller"][k] = tpl["seller"][k]
+            if b.get(k):
+                en["buyer"][k] = b[k]
+            elif k in en["buyer"]:
+                en["buyer"].pop(k)
+        path = os.path.join(tempfile.gettempdir(), "e2e.pdf")
+        build_pdf(doc, lines, seller, client, path)
+        with open(path, "rb") as f:
+            fx = api.to_facturx(db.dumps(en), f.read())
+        val = api.validate(fx)
+        ok = all(r.get("is_valid") for r in val.get("data", []))
+        steps.append(f"Factur-X générée et validée : {'valide' if ok else 'INVALIDE'}")
+        if not ok:
+            return jsonify({"steps": steps, "validation": val})
+        sent = api.send(fx, num)
+        steps.append(f"Facture {num} déposée (id {sent.get('id')}) pour {client['name']}")
+        events = []
+        for _ in range(15):
+            time.sleep(2)
+            events = (api.events(sent["id"]).get("data") or [])
+            if any(e.get("status_code") in ("fr:202", "fr:203", "fr:213", "fr:501") for e in events):
+                break
+        steps += [f"Statut : {superpdp.STATUS_LABELS.get(e['status_code'], e.get('status_text'))} ({e['status_code']})"
+                  for e in events]
+        from calc import vat_breakdown, totals
+        ttc = totals(lines)["ttc"]
+        api.post_event(superpdp.payment_event(sent["id"], date.today().isoformat(), ttc, vat_breakdown(lines)))
+        time.sleep(2)
+        last = (api.events(sent["id"]).get("data") or [])
+        if last:
+            e = last[-1]
+            steps.append(f"Après encaissement : {superpdp.STATUS_LABELS.get(e['status_code'], e.get('status_text'))} "
+                         f"({e['status_code']})")
+        return jsonify({"steps": steps, "events": last})
+    except Exception as e:  # noqa: BLE001
+        steps.append(f"ERREUR : {e}")
+        return jsonify({"steps": steps}), 500
+    finally:
+        c.close()
+
+
 @app.route("/sante")
 def health():
     return jsonify({"ok": True})
