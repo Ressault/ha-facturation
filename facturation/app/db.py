@@ -139,6 +139,8 @@ DEFAULT_SETTINGS = {
     "invoice_pattern": "F-{AAAA}-{NNNN}",
     "avoir_pattern": "AV-{AAAA}-{NNNN}",
     "devis_pattern": "D-{AAAA}-{NNN}",
+    "invoice_reset_yearly": "1",
+    "monae_job": "",
     "payment_days": "30",
     "devis_validity_days": "30",
     "default_vat_rate": "20",

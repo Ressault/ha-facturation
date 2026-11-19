@@ -11,6 +11,7 @@ import calc
 import db
 import importer
 import logic
+import monae
 import superpdp
 from calc import money
 from pdf import fmt_date, fmt_money, fmt_rate
@@ -561,6 +562,7 @@ def settings_page():
             f = request.form
             vals = {k: (f.get(k) or "").strip() for k in SETTINGS_FIELDS}
             vals["pdp_auto_send"] = "1" if f.get("pdp_auto_send") else "0"
+            vals["invoice_reset_yearly"] = "1" if f.get("invoice_reset_yearly") else "0"
             vals["siret"] = vals["siret"].replace(" ", "")
             vals["siren"] = (vals["siren"] or vals["siret"][:9]).replace(" ", "")
             if vals["siren"] and not vals["vat_number"]:
@@ -622,8 +624,23 @@ def import_page():
             c.commit()
         finally:
             c.close()
-        return render_template("import.html", report=report)
-    return render_template("import.html", report=None)
+        return render_template("import.html", report=report, job=monae.get_job())
+    return render_template("import.html", report=None, job=monae.get_job())
+
+
+@app.route("/import/monae", methods=["POST"])
+def import_monae():
+    f = request.form
+    try:
+        monae.start(f.get("login", ""), f.get("key", ""), f.get("firm_id") or None, with_pdfs=bool(f.get("pdfs")))
+    except monae.MonAEError as e:
+        flash(str(e), "error")
+    return redirect(url_for("import_page"))
+
+
+@app.route("/api/import/monae")
+def import_monae_status():
+    return jsonify(monae.get_job())
 
 
 @app.route("/api/debug/annuaire/<siren>")

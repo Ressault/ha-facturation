@@ -24,10 +24,11 @@ class BusinessError(Exception):
 
 # -- numérotation -------------------------------------------------------------
 
-def format_number(pattern: str, year: int, n: int) -> str:
+def format_number(pattern: str, year: int, n: int, month: int = 1) -> str:
     def repl(m):
         return str(n).zfill(len(m.group(1)))
-    out = pattern.replace("{AAAA}", f"{year:04d}").replace("{AA}", f"{year % 100:02d}")
+    out = (pattern.replace("{AAAA}", f"{year:04d}").replace("{AA}", f"{year % 100:02d}")
+           .replace("{MM}", f"{month:02d}"))
     out = re.sub(r"\{(N+)\}", repl, out)
     return out
 
@@ -37,17 +38,18 @@ DEFAULT_PATTERNS = {"invoice": "F-{AAAA}-{NNNN}", "avoir": "AV-{AAAA}-{NNNN}", "
 
 def counter_key(settings, key, year):
     pattern = settings.get(f"{key}_pattern") or DEFAULT_PATTERNS[key]
-    return pattern, (f"{key}_next_{year}" if "{AA" in pattern else f"{key}_next")
+    yearly = "{AA" in pattern and settings.get(f"{key}_reset_yearly", "1") != "0"
+    return pattern, (f"{key}_next_{year}" if yearly else f"{key}_next")
 
 
 def next_number(conn, kind: str, issue_date: str) -> str:
     s = db.get_settings(conn)
     key = KIND_PATTERN_KEYS[kind]
-    year = int(issue_date[:4])
+    year, month = int(issue_date[:4]), int(issue_date[5:7])
     pattern, ck = counter_key(s, key, year)
     n = int(s.get(ck) or 1)
     while True:
-        number = format_number(pattern, year, n)
+        number = format_number(pattern, year, n, month)
         if not conn.execute("SELECT 1 FROM documents WHERE number = ?", (number,)).fetchone():
             break
         n += 1
@@ -57,9 +59,9 @@ def next_number(conn, kind: str, issue_date: str) -> str:
 
 def preview_number(conn, kind, issue_date):
     s = db.get_settings(conn)
-    year = int(issue_date[:4])
+    year, month = int(issue_date[:4]), int(issue_date[5:7])
     pattern, ck = counter_key(s, KIND_PATTERN_KEYS[kind], year)
-    return format_number(pattern, year, int(s.get(ck) or 1))
+    return format_number(pattern, year, int(s.get(ck) or 1), month)
 
 
 # -- documents ----------------------------------------------------------------
@@ -200,8 +202,8 @@ def validate_document(conn, doc_id):
     issue = doc["issue_date"] or date.today().isoformat()
     # chronologie : pas de facture antérieure à la dernière émise
     last = conn.execute(
-        "SELECT MAX(issue_date) AS m FROM documents WHERE kind IN ('facture', 'avoir') AND status != 'brouillon' "
-        "AND imported = 0").fetchone()["m"]
+        "SELECT MAX(issue_date) AS m FROM documents WHERE kind IN ('facture', 'avoir') AND status != 'brouillon'"
+    ).fetchone()["m"]
     if last and issue < last:
         raise BusinessError(f"La date ({issue}) est antérieure à la dernière facture émise ({last}) : "
                             "la numérotation doit rester chronologique.")

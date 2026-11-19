@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(APP))
 def env(monkeypatch):
     tmp = tempfile.mkdtemp()
     monkeypatch.setenv("FACTU_DATA_DIR", tmp)
-    for m in ["db", "calc", "logic", "superpdp", "pdf", "importer", "app"]:
+    for m in ["db", "calc", "logic", "superpdp", "pdf", "importer", "monae", "app"]:
         sys.modules.pop(m, None)
     import app as appmod
     import db
@@ -245,3 +245,67 @@ def test_pick_address(env):
     res["data"][0]["is_active"] = True
     assert logic.pick_address(res, "552081317") == ("0225", "552081317")
     assert logic.pick_address({"data": [{"identifier": "0225:123456789_X", "is_active": True}]}, "123456789") == ("0225", "123456789_X")
+
+
+def test_monae_import(env, monkeypatch):
+    appmod, db, c = env
+    import monae
+
+    class Resp:
+        def __init__(self, data=None, content=b"", pages=1):
+            self._d, self.content = data, content
+            self.headers = {"X-Pagination": '{"total_pages": %d}' % pages}
+
+        def json(self):
+            return self._d
+
+    invoices = [
+        {"id": 1, "customer_id": 10, "invoice_ref": "202609-41", "invoiced_on": "2026-09-15", "term_on": "2026-10-15",
+         "title": "Rendus", "total": "1000.0", "total_with_vat": "1200.0", "paid_on": "2026-09-30", "payment_mode": 3,
+         "draft": False, "rebate_percentage": "0.0", "settlements": [],
+         "items": [{"position": 1, "title": "Rendu", "quantity": "2.0", "unit_price": "500.0", "vat": "0.200"},
+                   {"position": 2, "title": "Section", "quantity": "0.0", "unit_price": "0.0", "vat": "0.200"}]},
+        {"id": 2, "customer_id": 10, "invoice_ref": "202610-42", "invoiced_on": "2026-10-02", "title": "Visite",
+         "total": "500.0", "total_with_vat": "600.0", "paid_on": None, "draft": False, "rebate_percentage": "10.0",
+         "settlements": [{"paid_on": "2026-10-20", "total": "200.0", "payment_mode": 2}],
+         "items": [{"position": 1, "title": "Visite 360", "quantity": "1.0", "unit_price": "555.555", "vat": "0.200"}]},
+        {"id": 3, "customer_id": 11, "invoice_ref": "202610-43", "invoiced_on": "2026-10-05", "title": "Avoir",
+         "total": "-100.0", "total_with_vat": "-120.0", "paid_on": "2026-10-05", "draft": False,
+         "items": [{"position": 1, "title": "Geste", "quantity": "1.0", "unit_price": "-100.0", "vat": "0.200"}]},
+        {"id": 4, "customer_id": 10, "invoice_ref": "BROUILLON", "draft": True, "total": "1", "items": []},
+    ]
+    customers = [{"id": 10, "company_name": "Agence Dupont", "siret": "73282932000074", "street": "2 av", "zip_code": "75001",
+                  "city": "Paris", "country": "FR", "individual": False, "electronic_address": "0225:732829320"},
+                 {"id": 11, "company_name": "", "first_name": "Jean", "last_name": "Martin", "individual": True}]
+
+    def fake_get(self, path, params=None, raw=False):
+        if path == "/account.json":
+            return {"firms": [{"id": 99, "name": "Moi"}]}
+        if path.endswith("/customers.json"):
+            return Resp(customers)
+        if path.endswith("/invoices.json"):
+            return Resp(invoices)
+        if path.endswith(".pdf"):
+            return Resp(content=b"%PDF-1.4 original")
+        raise AssertionError(path)
+
+    monkeypatch.setattr(monae.Api, "get", fake_get)
+    monae._run(monae.Api("u", "k"), None, True)
+    job = monae.get_job()
+    assert job["status"] == "done", job
+    r = job["report"]
+
+    assert (r["clients"], r["invoices"], r["avoirs"], r["approx"]) == (2, 2, 1, 0)
+    assert r["numbering"]["pattern"] == "{AAAA}{MM}-{N}" and r["numbering"]["next"] == 44
+    conn = db.connect()
+    docs = {d["number"]: d for d in conn.execute("SELECT * FROM documents").fetchall()}
+    assert docs["202609-41"]["status"] == "payee" and docs["202609-41"]["total_ttc"] == 1200
+    assert docs["202610-42"]["status"] == "partielle" and docs["202610-42"]["total_ttc"] == 600
+    assert docs["202610-43"]["kind"] == "avoir" and docs["202610-43"]["total_ttc"] == 120
+    assert os.path.exists(docs["202609-41"]["pdf_path"])
+    cl = conn.execute("SELECT * FROM clients WHERE name='Agence Dupont'").fetchone()
+    assert cl["siren"] == "732829320" and cl["pdp_address_value"] == "732829320"
+    # numérotation continue
+    import logic
+    assert logic.preview_number(conn, "facture", "2026-11-20") == "202611-44"
+    conn.close()

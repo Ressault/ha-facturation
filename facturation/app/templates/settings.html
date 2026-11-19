@@ -32,7 +32,8 @@
     <div><label>Prochain n° d'avoir</label><input name="{{ counters.avoir[0] }}" value="{{ counters.avoir[1] }}"></div>
     <div><label>Numérotation des devis</label><input name="devis_pattern" value="{{ s.devis_pattern }}"></div>
     <div><label>Prochain n° de devis</label><input name="{{ counters.devis[0] }}" value="{{ counters.devis[1] }}"></div>
-    <div class="wide small muted">{AAAA} = année, {NNNN} = numéro sur 4 chiffres (remis à 1 chaque année). Pour continuer la numérotation de MonAE, reprenez son format et indiquez le numéro suivant.</div>
+    <div class="wide small muted">{AAAA} = année, {MM} = mois, {NNNN} = numéro sur 4 chiffres. L'import MonAE règle ces champs tout seul pour continuer votre numérotation.</div>
+    <div class="wide"><label style="display:flex; gap:8px; align-items:center"><input type="checkbox" name="invoice_reset_yearly" value="1" style="width:auto" {{ 'checked' if s.invoice_reset_yearly != '0' }}> Repartir à 1 chaque année (si le format contient l'année)</label></div>
     <div><label>Délai de paiement (jours)</label><input name="payment_days" value="{{ s.payment_days }}"></div>
     <div><label>Validité des devis (jours)</label><input name="devis_validity_days" value="{{ s.devis_validity_days }}"></div>
     <div><label>Taux de TVA par défaut</label><input name="default_vat_rate" value="{{ s.default_vat_rate }}"></div>
