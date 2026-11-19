@@ -124,33 +124,45 @@ def group_iban(iban):
 def payment_box(pdf, doc, seller, t, extra):
     """Encadré « Règlement par virement » : titulaire, IBAN en gros, BIC, référence, échéance, montant."""
     rest = t["ttc"] - money(extra.get("paid", 0) or 0)
+    num = doc.get("number")
     rows = [("Titulaire", seller.get("company_name", "")), ("IBAN", group_iban(seller["iban"]))]
     if seller.get("bic"):
         rows.append(("BIC", seller["bic"].upper()))
-    rows.append(("Référence à indiquer", f"Facture {doc.get('number') or ''}".strip()))
+    rows.append(("Référence à indiquer", f"Facture {num}" if num else "N° de la facture"))
     if doc.get("due_date"):
         rows.append(("À régler avant le", fmt_date(doc["due_date"])))
     rows.append(("Montant", fmt_money(rest)))
-    h = 9 + 6.4 * len(rows) + 3
+    # largeurs mesurées : rien ne déborde du cadre
+    pdf.set_font("dejavu", "", 8.2)
+    label_w = max(pdf.get_string_width(lbl) for lbl, _ in rows) + 6
+    val_w = 0
+    for lbl, val in rows:
+        pdf.set_font("dejavu", "B", 10.5 if lbl == "IBAN" else 9)
+        val_w = max(val_w, pdf.get_string_width(val))
+    pad = 6
+    w = min(178, pad * 2 + label_w + val_w + 4)
+    pdf.set_font("dejavu", "B", 9.5)
+    w = max(w, pdf.get_string_width("Règlement par virement bancaire") + pad * 2)
+    line_h = 6.2
+    h = pad + 6 + 1.5 + line_h * len(rows) + pad - 1.5
     if pdf.get_y() + h > 262:
         pdf.add_page()
-    x, y, w = 16, pdf.get_y(), 120
+    x, y = 16, pdf.get_y()
     pdf.set_fill_color(*LIGHT)
     pdf.set_draw_color(*HAIR)
     pdf.rect(x, y, w, h, style="DF", round_corners=True, corner_radius=2.5)
-    pdf.set_xy(x + 5, y + 3.5)
-    pdf.set_font("dejavu", "B", 9.5)
+    pdf.set_xy(x + pad, y + pad - 1)
     pdf.set_text_color(*INK)
-    pdf.cell(w - 10, 5, "Règlement par virement bancaire", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(w - pad * 2, 6, "Règlement par virement bancaire", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(1.5)
     for label, val in rows:
-        pdf.set_x(x + 5)
+        pdf.set_x(x + pad)
         pdf.set_font("dejavu", "", 8.2)
         pdf.set_text_color(*GREY)
-        pdf.cell(36, 6.4, label)
+        pdf.cell(label_w, line_h, label)
         pdf.set_text_color(*INK)
-        pdf.set_font("dejavu", "B", 11 if label == "IBAN" else 9)
-        pdf.cell(w - 46, 6.4, val, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("dejavu", "B", 10.5 if label == "IBAN" else 9)
+        pdf.cell(w - pad * 2 - label_w, line_h, val, new_x="LMARGIN", new_y="NEXT")
     pdf.set_y(y + h + 4)
 
 

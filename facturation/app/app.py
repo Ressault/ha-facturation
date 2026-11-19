@@ -283,13 +283,12 @@ def index():
         c.close()
 
 
-DASH_DEFAULT = [("enc_mois", 3), ("enc_annee", 6), ("reste", 3), ("graphique", 8), ("trimestre", 4),
-                ("facture", 3), ("virement", 6), ("raccourcis", 3), ("listes", 12)]
-DASH_WIDTHS = (3, 4, 6, 8, 12)
+DASH_DEFAULT = [("enc_mois", 3), ("enc_annee", 6), ("reste", 3), ("facture", 3), ("raccourcis", 3),
+                ("graphique", 8), ("trimestre", 4), ("virement", 12), ("listes", 12)]
 
 
 def dash_layout(c):
-    """Disposition des tuiles de l'accueil : ordre et largeur enregistrés, tuiles nouvelles ajoutées à la fin."""
+    """Disposition des tuiles : ordre, largeur (colonnes sur 12) et hauteur (rangées, 0 = automatique)."""
     import json
     known = dict(DASH_DEFAULT)
     try:
@@ -299,10 +298,13 @@ def dash_layout(c):
     out, seen = [], set()
     for t in saved:
         if isinstance(t, dict) and t.get("id") in known and t["id"] not in seen:
-            w = int(t.get("w") or known[t["id"]])
-            out.append({"id": t["id"], "w": w if w in DASH_WIDTHS else known[t["id"]]})
+            try:
+                w, h = int(t.get("w") or known[t["id"]]), int(t.get("h") or 0)
+            except (TypeError, ValueError):
+                w, h = known[t["id"]], 0
+            out.append({"id": t["id"], "w": min(12, max(2, w)), "h": min(30, max(0, h))})
             seen.add(t["id"])
-    out += [{"id": k, "w": w} for k, w in DASH_DEFAULT if k not in seen]
+    out += [{"id": k, "w": w, "h": 0} for k, w in DASH_DEFAULT if k not in seen]
     return out
 
 
@@ -315,7 +317,8 @@ def dash_save():
         if items is None or data.get("reset"):
             db.set_settings({"dash_layout": ""}, c)
         else:
-            db.set_settings({"dash_layout": json.dumps([{"id": str(t.get("id")), "w": int(t.get("w") or 3)}
+            db.set_settings({"dash_layout": json.dumps([{"id": str(t.get("id")), "w": int(t.get("w") or 3),
+                                                         "h": int(t.get("h") or 0)}
                                                         for t in items if isinstance(t, dict)])}, c)
     return jsonify({"ok": True})
 
@@ -1479,8 +1482,9 @@ def with_title(lines):
 
 def all_clients(c, keep_id=None):
     """Clients proposés dans la liste déroulante (sans ceux retirés, sauf celui déjà choisi)."""
-    return c.execute("SELECT id, name, kind, email FROM clients WHERE COALESCE(archived, 0) = 0 OR id = ? "
-                     "ORDER BY name COLLATE NOCASE", (keep_id or 0,)).fetchall()
+    return [dict(r) for r in c.execute(
+        "SELECT id, name, kind, email, city, siren FROM clients WHERE COALESCE(archived, 0) = 0 OR id = ? "
+        "ORDER BY name COLLATE NOCASE", (keep_id or 0,)).fetchall()]
 
 
 def services(c):

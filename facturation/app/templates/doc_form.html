@@ -17,10 +17,11 @@
   <div class="fgrid">
     <div class="w2"><label>Client</label>
       <div class="row" style="flex-wrap:nowrap; gap:6px">
-        <select name="client_id" required>
-          <option value="">Choisir un client…</option>
-          {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if doc.client_id == c.id }}>{{ c.name }}{% if c.kind == 'particulier' %} (particulier){% endif %}</option>{% endfor %}
-        </select>
+        {% set cur_client = clients|selectattr('id', 'equalto', doc.client_id or -1)|first %}
+        <div class="combo-wrap" style="flex:1">
+          <input id="client_q" value="{{ cur_client.name if cur_client else '' }}" placeholder="Tapez le nom du client…">
+          <input type="hidden" name="client_id" id="client_id" value="{{ doc.client_id or '' }}">
+        </div>
         <a class="btn icon" title="Nouveau client" href="{{ url_for('client_form', next=doc.kind if doc.kind != 'avoir' else 'facture') }}">＋</a>
       </div></div>
     <div><label>Date</label><input type="date" name="issue_date" id="issue_date" value="{{ doc.issue_date or '' }}"></div>
@@ -126,6 +127,18 @@ function recalc() {
   document.getElementById('tttc').textContent = fmt(ht + tva);
 }
 const SERVICES = {{ (services or [])|tojson }};
+// client : saisie assistée
+const CLIENTS = {{ clients|tojson }};
+(() => {
+  const q = document.getElementById('client_q'), id = document.getElementById('client_id');
+  combo(q, CLIENTS.map(c => ({label: c.name, sub: [c.kind === 'particulier' ? 'Particulier' : '', c.city, c.siren].filter(Boolean).join(' · '), c})),
+        it => { q.value = it.c.name; id.value = it.c.id; q.classList.remove('bad'); }, {showAll: true});
+  q.addEventListener('input', () => { const hit = CLIENTS.find(c => c.name.toLowerCase() === q.value.trim().toLowerCase()); id.value = hit ? hit.id : ''; });
+  document.getElementById('docform').addEventListener('submit', e => {
+    if (e.submitter && e.submitter.formTarget === '_blank') return;
+    if (!id.value) { e.preventDefault(); q.classList.add('bad'); q.focus(); alert('Choisissez un client dans la liste (tapez quelques lettres de son nom).'); }
+  });
+})();
 const fr = v => String(v).replace('.', ',');
 function bindService(tr) {
   const lib = tr.querySelector('textarea.lib'); if (!lib || !SERVICES.length) return;

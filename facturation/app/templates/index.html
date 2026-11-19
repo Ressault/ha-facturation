@@ -186,16 +186,17 @@
   "graphique": tile_graphique, "trimestre": tile_trimestre, "virement": tile_virement, "raccourcis": tile_raccourcis,
   "listes": tile_listes} %}
 <div class="dashbar" id="dashbar" hidden>
-  <span><b>Mode réorganisation</b> · glissez les tuiles par ⠿ pour les déplacer, ↔ pour changer leur largeur.</span>
+  <span><b>Mode réorganisation</b> · ⠿ pour déplacer une tuile · coin ◢ pour la redimensionner (largeur et hauteur) · double-clic sur ◢ : hauteur automatique.</span>
   <span class="spacer" style="flex:1"></span>
   <button type="button" id="dash-reset" class="small">Disposition par défaut</button>
   <button type="button" id="dash-save" class="small primary">Enregistrer la disposition</button>
 </div>
 <div class="dash" id="dash">
 {% for t in layout %}
-  <section class="tile w{{ t.w }}" data-id="{{ t.id }}" data-w="{{ t.w }}">
-    <div class="tile-tools"><span class="tgrip" title="Glisser pour déplacer">⠿</span><button type="button" class="tsize" title="Changer la largeur">↔</button></div>
+  <section class="tile" data-id="{{ t.id }}" data-w="{{ t.w }}" data-h="{{ t.h }}" style="grid-column: span {{ t.w }}">
+    <div class="tile-tools"><span class="tgrip" title="Glisser pour déplacer">⠿</span></div>
     {{ TILES[t.id] }}
+    <span class="tresize" title="Glisser pour redimensionner · double-clic : hauteur automatique">◢</span>
   </section>
 {% endfor %}
 </div>
@@ -253,22 +254,53 @@ document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click
   ['t1', 't2', 't3'].forEach(id => document.getElementById(id).hidden = id !== b.dataset.t);
 }));
 
-// réorganisation des tuiles
+// tuiles : grille de 12 colonnes, rangées de ROW px ; hauteur auto = ajustée au contenu
 const dash = document.getElementById('dash'), bar = document.getElementById('dashbar'), editBtn = document.getElementById('dash-edit');
-const WIDTHS = [3, 4, 6, 8, 12];
-let dragTile = null;
+const ROW = 20, GAP = 16;
+const narrow = () => matchMedia('(max-width: 700px)').matches;
+function applySize(t) {
+  const w = +t.dataset.w, h = +t.dataset.h;
+  t.style.gridColumn = narrow() ? '1 / -1' : `span ${innerWidth < 1100 ? Math.max(w, 6) : w}`;
+  const card = t.querySelector(':scope > .card');
+  if (h > 0 && !narrow()) { t.style.gridRowEnd = `span ${h}`; t.classList.add('fixed'); return; }
+  t.classList.remove('fixed');
+  card.style.height = 'auto';
+  const need = card.getBoundingClientRect().height;
+  card.style.height = '';
+  t.style.gridRowEnd = `span ${Math.max(1, Math.ceil((need + GAP) / (ROW + GAP)))}`;
+}
+function layoutAll() { dash.querySelectorAll('.tile').forEach(applySize); }
+let lt; window.addEventListener('resize', () => { clearTimeout(lt); lt = setTimeout(() => { draw(curMode()); spark(curMode()); layoutAll(); }, 120); });
+document.addEventListener('mode', () => setTimeout(layoutAll, 0));
+document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => setTimeout(layoutAll, 0)));
+layoutAll(); window.addEventListener('load', layoutAll);
 editBtn.addEventListener('click', () => {
   const on = !dash.classList.contains('editing');
   dash.classList.toggle('editing', on); bar.hidden = !on; editBtn.classList.toggle('primary', on);
   dash.querySelectorAll('.tile').forEach(t => t.draggable = on);
 });
-dash.querySelectorAll('.tsize').forEach(b => b.addEventListener('click', () => {
-  const t = b.closest('.tile'), w = +t.dataset.w, nw = WIDTHS[(WIDTHS.indexOf(w) + 1) % WIDTHS.length];
-  t.classList.remove('w' + w); t.classList.add('w' + nw); t.dataset.w = nw;
-  setTimeout(() => { draw(curMode()); spark(curMode()); }, 50);
-}));
+// redimensionner par le coin
+dash.querySelectorAll('.tresize').forEach(hd => {
+  hd.addEventListener('pointerdown', e => {
+    if (!dash.classList.contains('editing')) return;
+    e.preventDefault(); e.stopPropagation();
+    const t = hd.closest('.tile'), r = t.getBoundingClientRect(), dr = dash.getBoundingClientRect();
+    const col = (dr.width - GAP * 11) / 12, x0 = e.clientX, y0 = e.clientY, w0 = r.width, h0 = r.height;
+    t.draggable = false; t.classList.add('sizing'); hd.setPointerCapture(e.pointerId);
+    const move = ev => {
+      const w = Math.min(12, Math.max(2, Math.round((w0 + ev.clientX - x0 + GAP) / (col + GAP))));
+      const h = Math.max(2, Math.round((h0 + ev.clientY - y0 + GAP) / (ROW + GAP)));
+      t.dataset.w = w; t.dataset.h = h; applySize(t);
+    };
+    const up = () => { hd.removeEventListener('pointermove', move); hd.removeEventListener('pointerup', up);
+      t.classList.remove('sizing'); t.draggable = true; draw(curMode()); spark(curMode()); };
+    hd.addEventListener('pointermove', move); hd.addEventListener('pointerup', up);
+  });
+  hd.addEventListener('dblclick', () => { const t = hd.closest('.tile'); t.dataset.h = 0; applySize(t); });
+});
+let dragTile = null;
 dash.addEventListener('dragstart', e => {
-  if (!dash.classList.contains('editing')) return e.preventDefault();
+  if (!dash.classList.contains('editing') || e.target.closest('.tresize')) return e.preventDefault();
   dragTile = e.target.closest('.tile'); if (!dragTile) return;
   dragTile.classList.add('moving'); e.dataTransfer.effectAllowed = 'move';
   try { e.dataTransfer.setData('text/plain', dragTile.dataset.id); } catch (err) {}
@@ -276,13 +308,14 @@ dash.addEventListener('dragstart', e => {
 dash.addEventListener('dragover', e => {
   if (!dragTile) return; e.preventDefault();
   const t = e.target.closest('.tile'); if (!t || t === dragTile) return;
-  const r = t.getBoundingClientRect(), before = (e.clientX - r.left) < r.width / 2 && (e.clientY - r.top) < r.height * 0.75 || (e.clientY - r.top) < r.height / 3;
+  const r = t.getBoundingClientRect();
+  const before = (e.clientY - r.top) < r.height / 3 || ((e.clientY - r.top) < r.height * 2 / 3 && (e.clientX - r.left) < r.width / 2);
   dash.insertBefore(dragTile, before ? t : t.nextSibling);
 });
 dash.addEventListener('drop', e => e.preventDefault());
 dash.addEventListener('dragend', () => { if (dragTile) dragTile.classList.remove('moving'); dragTile = null; });
 async function saveLayout(reset) {
-  const tiles = [...dash.querySelectorAll('.tile')].map(t => ({id: t.dataset.id, w: +t.dataset.w}));
+  const tiles = [...dash.querySelectorAll('.tile')].map(t => ({id: t.dataset.id, w: +t.dataset.w, h: +t.dataset.h}));
   await fetch('{{ url_for("dash_save") }}', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(reset ? {reset: true} : {tiles})});
   location.reload();
