@@ -247,7 +247,7 @@ function spark(mode) {
   svg.innerHTML = out;
 }
 document.addEventListener('mode', e => { draw(e.detail); spark(e.detail); });
-let m0 = 'ht'; try { m0 = localStorage.getItem('factu-mode') || 'ht'; } catch (e) {}
+let m0 = document.documentElement.dataset.mode || 'ht';
 draw(m0); spark(m0);
 document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
@@ -322,6 +322,6 @@ async function saveLayout(reset) {
 }
 document.getElementById('dash-save').addEventListener('click', () => saveLayout(false));
 document.getElementById('dash-reset').addEventListener('click', () => saveLayout(true));
-function curMode() { try { return localStorage.getItem('factu-mode') || 'ht'; } catch (e) { return 'ht'; } }
+function curMode() { return document.documentElement.dataset.mode || 'ht'; }
 </script>
 {% endblock %}

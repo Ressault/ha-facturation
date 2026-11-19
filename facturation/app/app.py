@@ -319,6 +319,20 @@ def dash_layout(c):
     return out
 
 
+@app.route("/preferences", methods=["POST"])
+def save_prefs():
+    data = request.get_json(silent=True) or {}
+    vals = {}
+    if data.get("ui_theme") in ("light", "dark"):
+        vals["ui_theme"] = data["ui_theme"]
+    if data.get("ui_mode") in ("ht", "ttc"):
+        vals["ui_mode"] = data["ui_mode"]
+    if vals:
+        with db.transaction() as c:
+            db.set_settings(vals, c)
+    return jsonify({"ok": True})
+
+
 @app.route("/accueil/disposition", methods=["POST"])
 def dash_save():
     import json

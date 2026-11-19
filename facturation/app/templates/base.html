@@ -1,14 +1,13 @@
 {%- set ep = request.endpoint or '' -%}
 {%- set kind_arg = request.args.get('kind', 'facture') -%}
 <!doctype html>
-<html lang="fr">
+<html lang="fr" data-theme="{{ settings.ui_theme or 'light' }}" data-mode="{{ settings.ui_mode or 'ht' }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <style>html{background:#eceff3}html[data-theme=dark]{background:#0b1720}</style>
 <title>{% block title %}Facturation{% endblock %}</title>
-<script>try { document.documentElement.dataset.theme = localStorage.getItem('factu-theme') || 'light'; } catch (e) { document.documentElement.dataset.theme = 'light'; }</script>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=50">
 </head>
 <body>
@@ -152,20 +151,21 @@ const themeBtn = document.getElementById('theme');
 function paintTheme() { themeBtn.textContent = document.documentElement.dataset.theme === 'light' ? '☾' : '☀'; }
 themeBtn.addEventListener('click', () => {
   const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-  document.documentElement.dataset.theme = t; try { localStorage.setItem('factu-theme', t); } catch (e) {}
+  document.documentElement.dataset.theme = t; savePref({ui_theme: t});
   paintTheme();
 });
 paintTheme();
 // mode HT / TTC mémorisé
-const MODE_KEY = 'factu-mode';
+// préférences enregistrées dans l'app (donc dans les sauvegardes), pas dans le navigateur
+function savePref(p) { fetch('{{ url_for("save_prefs") }}', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(p)}).catch(() => {}); }
 function setMode(m) {
-  try { localStorage.setItem(MODE_KEY, m); } catch (e) {}
+  if (document.documentElement.dataset.mode !== m) { document.documentElement.dataset.mode = m; savePref({ui_mode: m}); }
   document.querySelectorAll('[data-ht]').forEach(el => el.textContent = el.dataset[m]);
   document.querySelectorAll('.seg[data-mode] button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
   document.dispatchEvent(new CustomEvent('mode', {detail: m}));
 }
 document.querySelectorAll('.seg[data-mode] button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.m)));
-let initMode = 'ht'; try { initMode = localStorage.getItem(MODE_KEY) || 'ht'; } catch (e) {}
+let initMode = document.documentElement.dataset.mode || 'ht';
 if (document.querySelector('.seg[data-mode]')) setMode(initMode);
 </script>
 {% block scripts %}{% endblock %}

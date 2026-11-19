@@ -259,7 +259,7 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
     y += 4
     pdf.set_xy(16, y)
     word = TITLES[kind]
-    num = f"n° {doc['number']}" if doc.get("number") else "— brouillon"
+    num = f"N° {doc['number']}" if doc.get("number") else "N° (brouillon)"
     pdf.set_font("dejavu", "B", 13)
     pdf.set_text_color(*INK)
     ww = pdf.get_string_width(word) + 2.2
