@@ -626,6 +626,22 @@ def import_page():
     return render_template("import.html", report=None)
 
 
+@app.route("/api/debug/annuaire/<siren>")
+def api_debug_directory(siren):
+    c = conn()
+    try:
+        api = superpdp.Client("x", "x", db.get_settings(c).get("pdp_endpoint"))
+        out = {}
+        for name, fn in (("companies", api.lookup_company), ("entries", api.directory_entries)):
+            try:
+                out[name] = fn(siren)
+            except Exception as e:  # noqa: BLE001
+                out[name] = {"error": str(e)}
+        return jsonify(out)
+    finally:
+        c.close()
+
+
 @app.route("/sante")
 def health():
     return jsonify({"ok": True})
