@@ -277,10 +277,20 @@ def index():
                                drafts=drafts, devis=devis, chart=chart, month_label=period_label(month),
                                quarter_label=f"T{q[-1]} {q[:4]}", year=y, pdp_errors=errors, last_year=last_year,
                                last_year_full=last_year_full, series=series, years_cmp=years_cmp,
-                               layout=dash_layout(c),
+                               layout=dash_layout(c), hello_name=hello_name(db.get_settings(c)),
                                plafond=plafond, arrears=logic.urssaf_arrears(c), transfer=transfer)
     finally:
         c.close()
+
+
+def hello_name(s):
+    """Prénom affiché sur l'accueil : réglage, sinon le nom de l'utilisateur Home Assistant."""
+    if (s.get("first_name") or "").strip():
+        return s["first_name"].strip()
+    ha = (request.headers.get("X-Remote-User-Display-Name") or request.headers.get("X-Remote-User-Name") or "").strip()
+    if ha:
+        return ha.split()[0].capitalize()
+    return ""
 
 
 DASH_DEFAULT = [("enc_mois", 3), ("enc_annee", 6), ("reste", 3), ("facture", 3), ("raccourcis", 3),
@@ -1339,7 +1349,7 @@ def export_zip(year):
 # -- réglages -----------------------------------------------------------------
 
 SETTINGS_FIELDS = ["company_name", "company_trade_name", "address", "post_code", "city", "siren", "siret",
-                   "vat_number", "ape", "email", "phone", "website", "iban", "bic", "rcs_rm", "insurance", "invoice_pattern",
+                   "vat_number", "ape", "email", "phone", "website", "first_name", "iban", "bic", "rcs_rm", "insurance", "invoice_pattern",
                    "avoir_pattern", "devis_pattern", "devis_validity_days", "default_vat_rate",
                    "late_penalty", "recovery_fee", "discount_terms", "footer_note", "ca3_due_day", "pdp_client_id",
                    "pdp_endpoint", "ereporting_start", "default_nature", "default_payment_terms",

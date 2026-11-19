@@ -281,6 +281,17 @@ SERVICES_SEED = [
 ]
 
 
+def seed_first_name(conn):
+    """Prénom de l'accueil : renseigné une fois d'après le nom de l'entreprise s'il contient « Antonin »."""
+    cur = conn.execute("SELECT value FROM settings WHERE key = 'first_name'").fetchone()
+    if cur and (cur[0] or "").strip():
+        return
+    name = conn.execute("SELECT value FROM settings WHERE key = 'company_name'").fetchone()
+    for w in ((name[0] if name else "") or "").split():
+        if w.lower() == "antonin":
+            conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('first_name', 'Antonin')")
+
+
 def seed_services(conn):
     """Prestations d'Antonin, ajoutées une seule fois (il peut ensuite les modifier ou les supprimer)."""
     done = conn.execute("SELECT value FROM settings WHERE key = 'services_seeded'").fetchone()
@@ -321,6 +332,7 @@ def init_db():
         conn.executescript(SCHEMA_V2)
         conn.executescript(SCHEMA_V3)
         seed_services(conn)
+        seed_first_name(conn)
         for table, col, decl in MIGRATIONS:
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if col not in cols:

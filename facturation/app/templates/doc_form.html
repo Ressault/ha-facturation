@@ -6,6 +6,17 @@
   <h1>{% if doc.id %}{{ KIND_LABEL[doc.kind] }} {% if doc.number %}n° {{ doc.number }}{% endif %}{% else %}{{ 'Nouveau devis' if is_devis else ('Nouvel avoir' if doc.kind == 'avoir' else 'Nouvelle facture') }}{% endif %}</h1>
   {% if doc.status == 'brouillon' or not doc.id %}<span class="pill green">Brouillon</span>{% endif %}
   {% if preview %}<span class="small muted">Numéro {{ 'attribué à la finalisation' if not is_devis else '' }} : {{ preview }}</span>{% endif %}
+  <span class="spacer"></span>
+  <details class="menu-btn">
+    <summary>Actions ▾</summary>
+    <div class="pop">
+      <button type="submit" formaction="{{ url_for('doc_preview') }}" formtarget="_blank" formnovalidate>Aperçu PDF</button>
+      {% if doc.id %}
+      <hr>
+      <button type="submit" form="delform" class="danger">{{ 'Supprimer le devis' if is_devis else 'Supprimer le brouillon' }}</button>
+      {% endif %}
+    </div>
+  </details>
 </div>
 
   <input type="hidden" name="id" value="{{ doc.id or '' }}">
@@ -80,7 +91,6 @@
   </div>
 
   <div class="formbar">
-    <button type="submit" class="left" formaction="{{ url_for('doc_preview') }}" formtarget="_blank" formnovalidate>👁 Aperçu PDF</button>
     <a class="btn" href="{{ url_for('doc_view', doc_id=doc.id) if doc.id else url_for('documents', kind=doc.kind if doc.kind != 'avoir' else 'facture') }}">Annuler</a>
     {% if is_devis %}
       <button class="primary" name="action" value="enregistrer">Enregistrer le devis</button>
@@ -92,6 +102,10 @@
   </div>
 </div>
 </form>
+{% if doc.id %}
+<form method="post" id="delform" action="{{ url_for('doc_delete', doc_id=doc.id) }}"
+      data-confirm="{{ 'Supprimer définitivement ce devis ?' if is_devis else 'Supprimer ce brouillon de facture ? Il n’a pas de numéro, rien n’est conservé.' }}"></form>
+{% endif %}
 {% endblock %}
 {% block scripts %}
 <script>
@@ -198,6 +212,7 @@ body.addEventListener('dragend', () => {
   if (!dragRow) return; dragRow.classList.remove('dragging'); dragRow.draggable = false; dragRow = null; recalc();
 });
 
+document.addEventListener('click', e => { document.querySelectorAll('details.menu-btn[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); }); });
 // échéance automatique
 const terms = document.getElementById('payment_terms'), due = document.getElementById('due_date'), issue = document.getElementById('issue_date');
 function computeDue() {

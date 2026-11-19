@@ -23,6 +23,8 @@
     <div><label>Code APE</label><input name="ape" value="{{ s.ape }}"></div>
     <div><label>E-mail</label><input name="email" value="{{ s.email }}"></div>
     <div><label>Téléphone</label><input name="phone" value="{{ s.phone }}"></div>
+    <div><label>Prénom (accueil)</label><input name="first_name" value="{{ s.first_name or '' }}" placeholder="ex. Antonin">
+      <div class="help">Pour « Bonjour Antonin » sur l'accueil.</div></div>
     <div><label>Site internet</label><input name="website" value="{{ s.website or '' }}" placeholder="ex. www.monsite.fr">
       <div class="help">Affiché en pied de page, après « Entrepreneur individuel (EI) ».</div></div>
     <div><label>IBAN</label><input name="iban" value="{{ s.iban }}"></div>

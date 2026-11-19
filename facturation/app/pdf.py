@@ -203,15 +203,6 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
         pdf.cell(100, 4.3, ln, new_x="LMARGIN", new_y="NEXT")
     y_seller_end = pdf.get_y()
 
-    pdf.set_xy(120, 15)
-    pdf.set_font("dejavu", "B", 22)
-    pdf.set_text_color(*INK)
-    pdf.cell(74, 10, TITLES[kind], align="R", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_x(120)
-    pdf.set_font("dejavu", "", 10)
-    pdf.set_text_color(*GREY)
-    pdf.cell(74, 6, f"N° {doc.get('number') or 'brouillon'}", align="R", new_x="LMARGIN", new_y="NEXT")
-
     refs = [("Date", fmt_date(doc.get("issue_date")))]
     if kind == "devis" and doc.get("validity_date"):
         refs.append(("Valable jusqu'au", fmt_date(doc["validity_date"])))
@@ -220,21 +211,11 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
     if kind == "facture" and doc.get("payment_terms"):
         refs.append(("Règlement", TERMS_LABEL.get(doc["payment_terms"], doc["payment_terms"])))
     if doc.get("service_date"):
-        refs.append(("Prestation", doc["service_date"]))
+        refs.append(("Réalisé le", doc["service_date"]))
     if kind == "avoir" and extra.get("avoir_of_number"):
         refs.append(("Sur facture", extra["avoir_of_number"]))
-    pdf.ln(2)
-    for label, value in refs:
-        pdf.set_x(120)
-        pdf.set_font("dejavu", "", 8.5)
-        pdf.set_text_color(*GREY)
-        pdf.cell(34, 5, label, align="R")
-        pdf.set_font("dejavu", "B", 8.5)
-        pdf.set_text_color(*INK)
-        pdf.cell(40, 5, str(value), align="R", new_x="LMARGIN", new_y="NEXT")
 
-    # --- Bloc client
-    y = max(pdf.get_y(), y_seller_end) + 8
+    # --- Bloc client, en haut à droite
     cl = [client.get("name", "")]
     cl += [x for x in (client.get("address") or "").splitlines() if x.strip()]
     cl.append(f"{client.get('post_code', '')} {client.get('city', '')}".strip())
@@ -245,6 +226,7 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
         small.append(f"SIREN {client['siren']}")
     if client.get("vat_number"):
         small.append(f"TVA {client['vat_number']}")
+    y = 16
     box_h = 9 + 5 * len([c for c in cl if c]) + (4.5 if small else 0)
     pdf.set_fill_color(*LIGHT)
     pdf.rect(112, y, 82, box_h, style="F", round_corners=True, corner_radius=2.5)
@@ -263,12 +245,58 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
         pdf.set_text_color(*GREY)
         pdf.cell(72, 4.5, "  ·  ".join(small), new_x="LMARGIN", new_y="NEXT")
 
-    pdf.set_y(y + box_h + 8)
+    # --- Bandeau du document, juste au-dessus des lignes : type, numéro bien visible, dates
+    y = max(y + box_h, y_seller_end) + 9
+    pdf.set_draw_color(*HAIR)
+    pdf.set_line_width(0.2)
+    pdf.line(16, y, 194, y)
+    y += 4
+    pdf.set_xy(16, y)
+    pdf.set_font("dejavu", "B", 12)
+    pdf.set_text_color(*GREY)
+    word = TITLES[kind]
+    ww = pdf.get_string_width(word) + 2.5
+    pdf.cell(ww, 9, word)
+    pdf.set_font("dejavu", "B", 17)
+    pdf.set_text_color(*INK)
+    num = f"N° {doc['number']}" if doc.get("number") else "Brouillon"
+    numw = pdf.get_string_width(num) + 4
+    pdf.cell(numw, 9, num)
+    # dates en colonnes alignées à droite (libellé au-dessus, valeur en gras)
+    cols = []
+    for label, value in refs:
+        pdf.set_font("dejavu", "B", 8.8)
+        vw = pdf.get_string_width(str(value))
+        pdf.set_font("dejavu", "", 7.2)
+        cols.append((label, str(value), max(vw, pdf.get_string_width(label)) + 7))
+    total_w = sum(c[2] for c in cols)
+    if 194 - total_w < 16 + ww + numw + 6:  # pas la place à côté du numéro : dates sur la ligne suivante
+        y += 11
+        x = 16
+        cols = [(lb, v, w) for lb, v, w in cols]
+        first = True
+    else:
+        x = 194 - total_w
+        first = False
+    for label, value, cw in cols:
+        al = "L" if first else "R"
+        pdf.set_xy(x, y)
+        pdf.set_font("dejavu", "", 7.2)
+        pdf.set_text_color(*GREY)
+        pdf.cell(cw, 4, label.upper(), align=al)
+        pdf.set_xy(x, y + 4.4)
+        pdf.set_font("dejavu", "B", 8.8)
+        pdf.set_text_color(*INK)
+        pdf.cell(cw, 5, value, align=al)
+        x += cw
+    pdf.set_y(y + 13)
     if doc.get("subject"):
         pdf.set_font("dejavu", "B", 10.5)
         pdf.set_text_color(*INK)
         pdf.multi_cell(0, 5.5, doc["subject"], align="L", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(2)
+    else:
+        pdf.ln(1)
 
     # --- Lignes
     widths = [88, 16, 14, 24, 14, 22]

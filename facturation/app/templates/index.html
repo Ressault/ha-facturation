@@ -2,7 +2,7 @@
 {% macro amt(o) -%}<span data-ht="{{ o.ht|money }}" data-ttc="{{ o.ttc|money }}">{{ o.ht|money }}</span>{%- endmacro %}
 {% block content %}
 <div class="head">
-  <div><h1>Bonjour{% if settings.company_name %} {{ settings.company_name.split()[0] }}{% endif %}</h1>
+  <div><h1>Bonjour{% if hello_name %} {{ hello_name }}{% endif %}</h1>
     <div class="sub">{{ today|date }} · {{ month_label|capitalize }}</div></div>
   <span class="spacer"></span>
   <div class="seg" data-mode><button data-m="ht" class="on">HT</button><button data-m="ttc">TTC</button></div>
