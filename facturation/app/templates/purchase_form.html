@@ -1,52 +1,91 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="head"><h1>{{ 'Dépense' if p else 'Nouvelle dépense' }}</h1><span class="spacer"></span>
+{% set rates = [(20, '20 %'), (10, '10 %'), (8.5, '8,5 %'), (5.5, '5,5 %'), (2.1, '2,1 %'), (1.05, '1,05 %'), (0, '0 % (pas de TVA)')] %}
+{% set cur_rate = p.vat_rate if p and p.vat_rate is not none else (none if p else 20) %}
+<div class="head"><h1>{{ 'Dépense' if p else 'Nouvelle dépense' }}</h1>
+  {% if p and p.draft %}<span class="pill green">Brouillon</span>{% endif %}
+  <span class="spacer"></span>
   {% if p and p.file_path %}<a class="btn" href="{{ url_for('purchase_file', pid=p.id) }}" target="_blank">Voir la facture</a>{% endif %}</div>
-<form method="post" class="card">
-  <datalist id="sups">{% for s in suppliers %}<option value="{{ s.name }}">{% endfor %}</datalist>
-  <div class="fields">
-    <div class="wide"><label>Fournisseur</label><input name="supplier" list="sups" required value="{{ (p.supplier if p else preset) or '' }}" autocomplete="off"></div>
-    <div class="wide"><label>Libellé</label><input name="description" value="{{ p.description if p and p.description else '' }}" placeholder="ex. Licence 3ds Max"></div>
-    <div><label>Date de la facture</label><input type="date" name="invoice_date" value="{{ p.invoice_date if p else today }}"></div>
-    <div><label>N° de facture</label><input name="invoice_number" value="{{ p.invoice_number if p and p.invoice_number else '' }}"></div>
+<form method="post" class="card" id="pform">
+  <div class="fgrid">
+    <div><label>Fournisseur</label><select name="supplier_pick" id="supplier_pick">
+      <option value="">—</option>
+      {% set curname = (p.supplier if p else preset) or '' %}
+      {% for s in suppliers %}<option {{ 'selected' if s.name|lower == curname|trim|lower }}>{{ s.name }}</option>{% endfor %}</select></div>
+    <div><label>Nouveau fournisseur</label><input name="supplier_new" id="supplier_new" autocomplete="off"
+      value="{{ curname if curname and curname|trim|lower not in suppliers|map(attribute='name')|map('lower')|list else '' }}"></div>
+    <div><label>Réf. facture</label><input name="invoice_number" value="{{ p.invoice_number if p and p.invoice_number else '' }}"></div>
+    <div><label>Libellé</label><input name="description" value="{{ p.description if p and p.description else '' }}" placeholder="ex. abonnement spotify"></div>
+
+    <div><label>Date de facture</label><input type="date" name="invoice_date" id="invoice_date" value="{{ p.invoice_date if p else today }}"></div>
+    <div><label>Montant TTC</label><input name="total_ttc" id="ttc" inputmode="decimal" value="{{ p.total_ttc|qty if p else '' }}" placeholder="0,00" autofocus></div>
+    <div><label>TVA récupérable</label>
+      <div class="row" style="flex-wrap:nowrap; gap:6px">
+        <select name="vat_rate" id="rate" style="width:46%">
+          {% for v, l in rates %}<option value="{{ v }}" {{ 'selected' if cur_rate is not none and cur_rate|float == v }}>{{ l }}</option>{% endfor %}
+          <option value="" {{ 'selected' if cur_rate is none }}>Montant libre</option>
+        </select>
+        <input name="total_tva" id="tva" inputmode="decimal" value="{{ p.total_tva|qty if p else '' }}" placeholder="0,00" style="width:54%">
+      </div></div>
+    <div><label>Total HT</label><div class="ro" id="ht_ro">{{ p.total_ht|money if p else '0,00 €' }}</div>
+      <input type="hidden" name="total_ht" id="ht" value="{{ p.total_ht if p else '' }}"></div>
+
+    <div><label>Mode de règlement</label><select name="method" id="method">
+      <option value="">Non payé</option>
+      {% for m in ['carte', 'virement', 'prélèvement', 'paypal', 'chèque', 'espèces', 'autre'] %}<option value="{{ m }}" {{ 'selected' if p and p.paid_date and p.method == m }}>{{ m|capitalize }}</option>{% endfor %}</select></div>
+    <div><label>Réglé le</label><input type="date" name="paid_date" id="paid_date" value="{{ p.paid_date if p and p.paid_date else '' }}"></div>
+    <div class="w2"><label>Réf. du paiement</label><input name="payment_ref" value="{{ p.payment_ref if p and p.payment_ref else '' }}" placeholder="Collez le libellé de l'opération Qonto"></div>
+
     <div><label>Échéance</label><input type="date" name="due_date" value="{{ p.due_date if p and p.due_date else '' }}"></div>
-  </div>
-  <div class="section-title">Montants</div>
-  <div class="fields">
-    <div><label>Montant HT</label><input name="total_ht" id="ht" inputmode="decimal" value="{{ p.total_ht|qty if p else '' }}"></div>
-    <div><label>TVA</label><input name="total_tva" id="tva" inputmode="decimal" value="{{ p.total_tva|qty if p else '' }}">
-      <div class="help">Calculer à <a href="#" data-r="20">20 %</a> · <a href="#" data-r="10">10 %</a> · <a href="#" data-r="5.5">5,5 %</a> · <a href="#" data-r="0">sans TVA</a></div></div>
-    <div><label>Montant TTC</label><input name="total_ttc" id="ttc" inputmode="decimal" value="{{ p.total_ttc|qty if p else '' }}"></div>
-  </div>
-  <div class="section-title">Règlement et TVA déductible</div>
-  <div class="fields">
-    <div><label>Nature</label><select name="nature">
-      {% for v, l in [('services', 'Prestation de service'), ('biens', 'Achat de biens'), ('mixte', 'Mixte'), ('autre', 'Autre')] %}
+    <div><label>Nature de l'achat</label><select name="nature">
+      {% for v, l in [('services', 'Prestation de service'), ('biens', 'Achat de biens'), ('mixte', 'Mixte'), ('autre', 'Non précisé')] %}
       <option value="{{ v }}" {{ 'selected' if (p.nature if p else 'services') == v }}>{{ l }}</option>{% endfor %}</select></div>
-    <div><label>Catégorie TVA</label><select name="category">
+    <div><label>Catégorie TVA (CA3)</label><select name="category">
       <option value="biens_services" {{ 'selected' if not p or p.category == 'biens_services' }}>Biens et services (ligne 20)</option>
       <option value="immobilisation" {{ 'selected' if p and p.category == 'immobilisation' }}>Immobilisation (ligne 19)</option></select></div>
-    <div><label>Payée le</label><input type="date" name="paid_date" value="{{ p.paid_date if p and p.paid_date else '' }}"></div>
-    <div><label>Moyen de paiement</label><select name="method">
-      <option value="">—</option>
-      {% for m in ['carte', 'virement', 'prélèvement', 'paypal', 'chèque', 'espèces', 'autre'] %}<option {{ 'selected' if p and p.method == m }}>{{ m }}</option>{% endfor %}</select></div>
     <div><label>TVA déduite le</label><input type="date" name="deduction_date" value="{{ p.deduction_date if p and p.deduction_date else '' }}">
-      <div class="help">Vide : date de paiement (services) ou de facture (biens).</div></div>
-    <div class="wide"><label>Notes</label><textarea name="notes">{{ p.notes if p and p.notes else '' }}</textarea></div>
+      <div class="help">Vide : date de règlement (services) ou de facture (biens).</div></div>
+
+    <div class="w4"><label>Notes / remarques</label><textarea name="notes" style="min-height:60px">{{ p.notes if p and p.notes else '' }}</textarea></div>
+    <div class="w4"><label class="check-row"><input type="checkbox" name="draft" value="1" {{ 'checked' if p and p.draft }}>
+      <span><b>Brouillon</b> : tant que la case est cochée, la dépense n'est pas comptée (TVA déductible, statistiques).</span></label></div>
   </div>
-  <div class="actions"><button class="primary">Enregistrer</button><a class="btn" href="{{ url_for('purchases') }}">Annuler</a></div>
+  <div class="formbar">
+    {% if p and p.source != 'pdp' %}<button form="delform" class="danger left">Supprimer</button>{% endif %}
+    <a class="btn" href="{{ url_for('purchases') }}">Annuler</a>
+    <button class="primary" name="next" value="">{{ 'Enregistrer' if p else 'Ajouter' }}</button>
+    {% if not p %}<button class="primary" name="next" value="new">＋ Ajouter &amp; nouvel achat</button>{% endif %}
+  </div>
 </form>
 {% if p and p.source != 'pdp' %}
-<form method="post" action="{{ url_for('purchase_delete', pid=p.id) }}" data-confirm="Supprimer cette dépense ?"><button class="danger">Supprimer la dépense</button></form>
+<form method="post" id="delform" action="{{ url_for('purchase_delete', pid=p.id) }}" data-confirm="Supprimer cette dépense ?"></form>
 {% endif %}
 {% endblock %}
 {% block scripts %}
 <script>
-const n = v => parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) || 0, f = v => (Math.round(v * 100) / 100).toFixed(2).replace('.', ',');
-document.querySelectorAll('[data-r]').forEach(a => a.addEventListener('click', e => {
-  e.preventDefault(); const r = n(a.dataset.r), ht = document.getElementById('ht'), ttc = document.getElementById('ttc'), tva = document.getElementById('tva');
-  if (n(ht.value)) { const t = n(ht.value) * r / 100; tva.value = f(t); ttc.value = f(n(ht.value) + t); }
-  else if (n(ttc.value)) { const h = n(ttc.value) / (1 + r / 100); ht.value = f(h); tva.value = f(n(ttc.value) - h); }
-}));
+const n = v => parseFloat(String(v).replace(/\s/g, '').replace(',', '.')) || 0;
+const f = v => (Math.round(v * 100) / 100).toFixed(2).replace('.', ',');
+const eur = v => (Math.round(v * 100) / 100).toLocaleString('fr-FR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' €';
+const ttc = document.getElementById('ttc'), rate = document.getElementById('rate'), tva = document.getElementById('tva');
+const ht = document.getElementById('ht'), htRo = document.getElementById('ht_ro');
+function fromRate() {
+  if (rate.value !== '') { const r = n(rate.value), t = n(ttc.value); tva.value = t ? f(t - t / (1 + r / 100)) : ''; }
+  showHt();
+}
+function showHt() { const h = n(ttc.value) - n(tva.value); ht.value = h.toFixed(2); htRo.textContent = eur(h); }
+ttc.addEventListener('input', fromRate);
+rate.addEventListener('change', fromRate);
+tva.addEventListener('input', () => { rate.value = ''; showHt(); });
+{% if not p %}fromRate();{% else %}showHt();{% endif %}
+// fournisseur : liste ou nouveau
+const pick = document.getElementById('supplier_pick'), neu = document.getElementById('supplier_new');
+pick.addEventListener('change', () => { if (pick.value) neu.value = ''; });
+neu.addEventListener('input', () => { if (neu.value) pick.value = ''; });
+// mode de règlement → date de règlement
+const method = document.getElementById('method'), paid = document.getElementById('paid_date');
+method.addEventListener('change', () => {
+  if (method.value && !paid.value) paid.value = document.getElementById('invoice_date').value || new Date().toISOString().slice(0, 10);
+  if (!method.value) paid.value = '';
+});
 </script>
 {% endblock %}

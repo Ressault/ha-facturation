@@ -52,7 +52,7 @@ def period_groups(today=None):
     y = today.year
     return [
         ("", [("tout", "Indifférent"), ("12m", "12 derniers mois")]),
-        (f"Mois {y}", [(f"m-{y}-{m:02d}", MOIS[m - 1].capitalize()) for m in range(today.month, 0, -1)]),
+        (f"Mois {y}", [(f"m-{y}-{m:02d}", MOIS[m - 1].capitalize()) for m in range(1, 13)]),
         (f"Trimestres {y}", [(f"t-{y}-{q}", f"T{q} {y}") for q in range(1, 5)]),
         ("Années", [(f"a-{a}", str(a)) for a in range(y, min(FIRST_YEAR, y) - 1, -1)]),
         ("", [("perso", "Personnalisée…")]),
@@ -122,7 +122,11 @@ def period_choice(code, today=None):
     return code
 
 
-app.jinja_env.globals.update(STATUS=STATUS, KIND_LABEL=KIND_LABEL, period_label=period_label, NATURES=NATURES,
+URSSAF_URL = "https://www.autoentrepreneur.urssaf.fr/portail/accueil.html"
+IMPOTS_URL = "https://cfspro.impots.gouv.fr/"  # page de connexion de l'espace professionnel
+PLAFOND_MICRO_SERVICES = 83600  # plafond micro BIC services / BNC 2026-2028
+
+app.jinja_env.globals.update(URSSAF_URL=URSSAF_URL, IMPOTS_URL=IMPOTS_URL, STATUS=STATUS, KIND_LABEL=KIND_LABEL, period_label=period_label, NATURES=NATURES,
                              TERMS=TERMS, PAYMENT_TERMS=PAYMENT_TERMS, period_groups=period_groups, MOIS_COURT=MOIS_COURT)
 
 
@@ -188,7 +192,7 @@ def sums(c, start, end):
         "WHERE kind IN ('facture','avoir') AND status != 'brouillon' AND issue_date >= ? AND issue_date < ?",
         (start, end)).fetchone()
     ach = c.execute("SELECT COALESCE(SUM(total_ttc),0) ttc, COALESCE(SUM(total_ht),0) ht FROM purchases "
-                    "WHERE invoice_date >= ? AND invoice_date < ?", (start, end)).fetchone()
+                    "WHERE COALESCE(draft, 0) = 0 AND invoice_date >= ? AND invoice_date < ?", (start, end)).fetchone()
     return {"enc": enc, "fac": {"ht": fac["ht"], "ttc": fac["ttc"]},
             "ach": {"ht": ach["ht"], "ttc": ach["ttc"]}}
 
@@ -243,9 +247,22 @@ def index():
             chart.append({"label": MOIS_COURT[k % 12], "year": k // 12, "enc": sm["enc"], "fac": sm["fac"]})
         errors = c.execute("SELECT COUNT(*) n FROM documents WHERE pdp_error IS NOT NULL AND pdp_id IS NULL "
                            "AND status!='brouillon'").fetchone()["n"]
+        try:
+            same_day = today.replace(year=y - 1)
+        except ValueError:
+            same_day = today.replace(year=y - 1, day=28)
+        last_year = sums(c, f"{y - 1}-01-01", (same_day + timedelta(days=1)).isoformat())
+        ca_year = stats["annee"]["enc"]["ht"]
+        plafond = {"limit": PLAFOND_MICRO_SERVICES, "ca": ca_year,
+                   "pct": min(100, round(100 * ca_year / PLAFOND_MICRO_SERVICES, 1)) if ca_year > 0 else 0}
+        transfer = None
+        if request.args.get("virement") or request.args.get("montant"):
+            transfer = logic.match_transfer(c, request.args.get("virement"), request.args.get("montant"))
+            transfer["label"] = request.args.get("virement") or ""
         return render_template("index.html", stats=stats, unpaid=unpaid, late=late, rest=rest, late_sum=late_sum,
                                drafts=drafts, devis=devis, chart=chart, month_label=period_label(month),
-                               quarter_label=f"T{q[-1]} {q[:4]}", year=y, pdp_errors=errors)
+                               quarter_label=f"T{q[-1]} {q[:4]}", year=y, pdp_errors=errors, last_year=last_year,
+                               plafond=plafond, arrears=logic.urssaf_arrears(c), transfer=transfer)
     finally:
         c.close()
 
@@ -364,6 +381,7 @@ def doc_filters(args, kind):
         "statut": args.get("statut", ""), "type": args.get("type", "facture_le"),
         "periode": period_choice(args.get("periode", "tout")),
         "du": args.get("du", ""), "au": args.get("au", ""), "q": (args.get("q") or "").strip(),
+        "client": args.get("client", ""),
     }
 
 
@@ -402,6 +420,9 @@ def query_documents(c, kind, f):
     elif st in ("en_attente", "accepte", "refuse", "facture"):
         sql += " AND d.status=?"
         args.append(st)
+    if f["client"].isdigit():
+        sql += " AND d.client_id = ?"
+        args.append(int(f["client"]))
     if f["q"]:
         sql += " AND (cl.name LIKE ? OR d.subject LIKE ? OR d.number LIKE ?)"
         args += [f"%{f['q']}%"] * 3
@@ -436,7 +457,11 @@ def documents():
     c = conn()
     try:
         rows, tot = query_documents(c, kind, f)
-        return render_template("documents.html", docs=rows, kind=kind, f=f, tot=tot)
+        kinds = ("facture", "avoir") if kind == "facture" else (kind,)
+        companies = c.execute(
+            f"SELECT DISTINCT cl.id, cl.name FROM clients cl JOIN documents d ON d.client_id = cl.id "
+            f"WHERE d.kind IN ({','.join('?' * len(kinds))}) ORDER BY cl.name COLLATE NOCASE", kinds).fetchall()
+        return render_template("documents.html", docs=rows, kind=kind, f=f, tot=tot, companies=companies)
     finally:
         c.close()
 
@@ -576,6 +601,30 @@ def doc_view(doc_id):
         remaining = money(doc["total_ttc"]) - paid - money(credited)
         avoir_rest = money(doc["total_ttc"]) - paid
         prev, nxt = logic.neighbours(c, doc)
+        crow = c.execute("SELECT email FROM clients WHERE id=?", (doc["client_id"] or 0,)).fetchone()
+        client_email = (client.get("email") if isinstance(client, dict) else None) or (crow["email"] if crow else None)
+        mail_link = None
+        if client_email:
+            s = db.get_settings(c)
+            late = doc["kind"] == "facture" and doc["status"] in ("emise", "partielle") and doc["due_date"] \
+                and doc["due_date"] < date.today().isoformat()
+            what = {"facture": "facture", "avoir": "avoir", "devis": "devis"}[doc["kind"]]
+            if late:
+                subj = f"Relance — facture {doc['number']}"
+                body = (f"Bonjour,\n\nSauf erreur de ma part, la facture {doc['number']} du {fmt_date(doc['issue_date'])}"
+                        f" d'un montant de {fmt_money(float(remaining))} TTC, arrivée à échéance le "
+                        f"{fmt_date(doc['due_date'])}, reste à régler.\n\nPourriez-vous procéder au règlement "
+                        f"par virement ?\n{('IBAN : ' + s['iban'] + chr(10)) if s.get('iban') else ''}"
+                        f"\nSi le paiement a été effectué entre-temps, merci de ne pas tenir compte de ce message."
+                        f"\n\nBien cordialement,\n{s.get('company_name') or ''}")
+            else:
+                subj = f"{what.capitalize()} {doc['number'] or ''}".strip()
+                body = (f"Bonjour,\n\nVeuillez trouver ci-joint {'le' if what == 'devis' else 'la' if what == 'facture' else "l'"}"
+                        f"{'' if what == 'avoir' else ' '}{what} {doc['number'] or ''}"
+                        f" d'un montant de {fmt_money(float(doc['total_ttc']))} TTC.\n\nBien cordialement,\n"
+                        f"{s.get('company_name') or ''}")
+            from urllib.parse import quote
+            mail_link = f"mailto:{client_email}?subject={quote(subj)}&body={quote(body)}"
         running = d(0)
         shown = []
         for ln in lines:
@@ -587,7 +636,8 @@ def doc_view(doc_id):
                 running = d(0)
             shown.append(ln)
         return render_template("doc_view.html", doc=doc, lines=shown, client=client, t=t, payments=payments,
-                               paid=paid, credited=credited, remaining=remaining, avoir_rest=avoir_rest, avoirs=avoirs, origin=origin,
+                               paid=paid, credited=credited, remaining=remaining, avoir_rest=avoir_rest, avoirs=avoirs,
+                               client_email=client_email, mail_link=mail_link, origin=origin,
                                invoices_from=invoices_from, prev=prev, nxt=nxt)
     finally:
         c.close()
@@ -717,7 +767,8 @@ def doc_delete(doc_id):
 def doc_payment(doc_id):
     f = request.form
     with db.transaction() as c:
-        logic.add_payment(c, doc_id, f.get("date") or date.today().isoformat(), f.get("amount"), f.get("method"))
+        logic.add_payment(c, doc_id, f.get("date") or date.today().isoformat(), f.get("amount"), f.get("method"),
+                          f.get("reference"))
     c = conn()
     try:
         if logic.pdp_configured(c):
@@ -745,7 +796,7 @@ def payment_delete(payment_id):
 def purchase_filters(args):
     return {"periode": period_choice(args.get("periode", "annee")), "du": args.get("du", ""), "au": args.get("au", ""),
             "type": args.get("type", "facture_le"), "statut": args.get("statut", ""),
-            "q": (args.get("q") or "").strip()}
+            "q": (args.get("q") or "").strip(), "fournisseur": args.get("fournisseur", "")}
 
 
 def query_purchases(c, f):
@@ -762,13 +813,18 @@ def query_purchases(c, f):
         sql += " AND p.paid_date IS NOT NULL"
     elif f["statut"] == "sans_deduction":
         sql += " AND p.deduction_date IS NULL"
+    if f["fournisseur"].isdigit():
+        sql += " AND p.supplier_id = ?"
+        args.append(int(f["fournisseur"]))
     if f["q"]:
-        sql += " AND (p.supplier LIKE ? OR s.name LIKE ? OR p.description LIKE ? OR p.invoice_number LIKE ?)"
-        args += [f"%{f['q']}%"] * 4
+        sql += " AND (p.supplier LIKE ? OR s.name LIKE ? OR p.description LIKE ? OR p.invoice_number LIKE ? " \
+               "OR p.payment_ref LIKE ?)"
+        args += [f"%{f['q']}%"] * 5
     sql += " ORDER BY (p.deduction_date IS NULL AND p.source='pdp') DESC, COALESCE(p.invoice_date,'') DESC, p.id DESC"
     rows = c.execute(sql, args).fetchall()
-    tot = {"n": len(rows), "ht": sum(r["total_ht"] or 0 for r in rows), "ttc": sum(r["total_ttc"] or 0 for r in rows),
-           "tva": sum(r["total_tva"] or 0 for r in rows)}
+    live = [r for r in rows if not r["draft"]]
+    tot = {"n": len(live), "ht": sum(r["total_ht"] or 0 for r in live), "ttc": sum(r["total_ttc"] or 0 for r in live),
+           "tva": sum(r["total_tva"] or 0 for r in live)}
     return rows, tot
 
 
@@ -780,7 +836,9 @@ def purchases():
         logic.generate_recurring(c)
         c.commit()
         rows, tot = query_purchases(c, f)
-        return render_template("purchases.html", purchases=rows, f=f, tot=tot)
+        companies = c.execute("SELECT DISTINCT s.id, s.name FROM suppliers s JOIN purchases p ON p.supplier_id = s.id "
+                              "ORDER BY s.name COLLATE NOCASE").fetchall()
+        return render_template("purchases.html", purchases=rows, f=f, tot=tot, companies=companies)
     finally:
         c.close()
 
@@ -810,19 +868,33 @@ def purchase_form(pid=None):
     try:
         if request.method == "POST":
             f = request.form
-            ht, tva = money(f.get("total_ht") or 0), money(f.get("total_tva") or 0)
-            ttc = money(f.get("total_ttc") or 0) or ht + tva
-            name = (f.get("supplier") or "").strip()
+            ttc, tva = money(f.get("total_ttc") or 0), money(f.get("total_tva") or 0)
+            rate = f.get("vat_rate")
+            if not ttc and f.get("total_ht"):  # saisie HT + TVA (ancien formulaire, import)
+                ttc = money(f.get("total_ht")) + tva
+                rate = None
+            if rate not in (None, "") and ttc:
+                r = d(rate)
+                tva = money(ttc - ttc / (1 + r / 100))
+            ht = ttc - tva
+            name = (f.get("supplier_new") or "").strip() or (f.get("supplier_pick") or "").strip() \
+                or (f.get("supplier") or "").strip()
             if not name:
-                raise logic.BusinessError("Indiquez le fournisseur.")
+                raise logic.BusinessError("Choisissez un fournisseur ou saisissez-en un nouveau.")
             sid = logic.supplier_id_for(c, name)
-            vals = {"supplier": name, "supplier_id": sid, "invoice_number": f.get("invoice_number"),
+            paid = f.get("paid_date") or None
+            method = f.get("method") or None
+            if method and not paid:
+                paid = f.get("invoice_date") or date.today().isoformat()
+            vals = {"supplier": name, "supplier_id": sid, "invoice_number": f.get("invoice_number") or None,
                     "invoice_date": f.get("invoice_date") or None, "description": f.get("description"),
                     "total_ht": float(ht), "total_tva": float(tva), "total_ttc": float(ttc),
+                    "vat_rate": float(rate) if rate not in (None, "") else None,
                     "category": f.get("category") or "biens_services", "nature": f.get("nature") or "services",
-                    "method": f.get("method") or None, "paid_date": f.get("paid_date") or None,
+                    "method": method, "paid_date": paid, "payment_ref": (f.get("payment_ref") or "").strip() or None,
                     "due_date": f.get("due_date") or None, "notes": f.get("notes") or None,
-                    "deduction_date": f.get("deduction_date") or f.get("paid_date") or None}
+                    "draft": 1 if f.get("draft") else 0,
+                    "deduction_date": f.get("deduction_date") or paid}
             if vals["nature"] == "biens" and not f.get("deduction_date") and vals["invoice_date"]:
                 vals["deduction_date"] = vals["invoice_date"]
             if pid:
@@ -831,7 +903,9 @@ def purchase_form(pid=None):
                 c.execute(f"INSERT INTO purchases ({', '.join(vals)}) VALUES ({', '.join('?' for _ in vals)})",
                           tuple(vals.values()))
             c.commit()
-            flash("Dépense enregistrée.", "ok")
+            flash(f"Dépense {name} · {fmt_money(float(ttc))} TTC enregistrée.", "ok")
+            if f.get("next") == "new":
+                return redirect(url_for("purchase_form"))
             return redirect(url_for("purchases"))
         p = c.execute("SELECT * FROM purchases WHERE id=?", (pid,)).fetchone() if pid else None
         sups = c.execute("SELECT name FROM suppliers ORDER BY name COLLATE NOCASE").fetchall()
@@ -1054,10 +1128,42 @@ def urssaf():
             due = (date.fromisoformat(end) + timedelta(days=30)).isoformat()
         res = calc.compute_urssaf(c, start, end, s)
         done = c.execute("SELECT done_at FROM tasks_done WHERE task=?", (f"urssaf:{period}",)).fetchone()
+        ledger = logic.urssaf_ledger(c)
+        cur = next((x for x in ledger if x["period"] == period), None)
+        pays = c.execute("SELECT * FROM urssaf_payments WHERE period=? ORDER BY date", (period,)).fetchall()
         return render_template("urssaf.html", r=res, period=period, label=label, prev=prev, nxt=nxt, done=done,
-                               start=start, end=(date.fromisoformat(end) - timedelta(days=1)).isoformat(), due=due)
+                               start=start, end=(date.fromisoformat(end) - timedelta(days=1)).isoformat(), due=due,
+                               ledger=ledger, cur=cur, pays=pays, arrears=logic.urssaf_arrears(c))
     finally:
         c.close()
+
+
+@app.route("/urssaf/<period>/cotisations", methods=["POST"])
+def urssaf_due(period):
+    with db.transaction() as c:
+        logic.urssaf_set_due(c, period, request.form.get("amount") or 0)
+    flash("Montant des cotisations enregistré.", "ok")
+    return redirect(url_for("urssaf", p=period))
+
+
+@app.route("/urssaf/<period>/paiement", methods=["POST"])
+def urssaf_pay(period):
+    f = request.form
+    with db.transaction() as c:
+        if not c.execute("SELECT 1 FROM urssaf_dues WHERE period=?", (period,)).fetchone():
+            r = logic.urssaf_estimate(c, period)
+            logic.urssaf_set_due(c, period, r["total"])
+        logic.urssaf_add_payment(c, period, f.get("date") or date.today().isoformat(), f.get("amount"), f.get("reference"))
+    flash("Règlement URSSAF enregistré.", "ok")
+    return redirect(url_for("urssaf", p=period))
+
+
+@app.route("/urssaf/paiement/<int:pid>/supprimer", methods=["POST"])
+def urssaf_pay_delete(pid):
+    with db.transaction() as c:
+        row = c.execute("SELECT period FROM urssaf_payments WHERE id=?", (pid,)).fetchone()
+        c.execute("DELETE FROM urssaf_payments WHERE id=?", (pid,))
+    return redirect(url_for("urssaf", p=row["period"]) if row else url_for("urssaf"))
 
 
 # -- export -------------------------------------------------------------------

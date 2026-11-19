@@ -7,7 +7,10 @@
 
 <form class="card" method="get">
   <div class="filters">
-    <div class="grow search"><input name="q" value="{{ f.q }}" placeholder="Fournisseur, libellé ou référence…"></div>
+    <div><label>Fournisseur</label><select name="fournisseur" onchange="this.form.submit()">
+      <option value="">Tous les fournisseurs</option>
+      {% for co in companies %}<option value="{{ co.id }}" {{ 'selected' if f.fournisseur == co.id|string }}>{{ co.name }}</option>{% endfor %}</select></div>
+    <div class="grow search"><label>Recherche</label><input name="q" value="{{ f.q }}" placeholder="Libellé, réf. facture ou de paiement…"></div>
     <div><label>Affichage</label><select name="statut" onchange="this.form.submit()">
       {% for v, l in [('', 'Tout'), ('non_payees', 'Non payées'), ('payees', 'Payées'), ('sans_deduction', 'TVA non déduite')] %}
       <option value="{{ v }}" {{ 'selected' if f.statut == v }}>{{ l }}</option>{% endfor %}</select></div>
@@ -31,20 +34,21 @@
   </div>
   {% if purchases %}
   <table class="list">
-    <tr><th>Date</th><th class="hide-m">Réf.</th><th>Fournisseur · libellé</th><th class="n hide-m">HT</th><th class="n">TTC</th><th class="n">Réglé</th><th class="hide-m">Par</th></tr>
+    <tr><th>Date</th><th class="hide-m">Réf.</th><th>Fournisseur · libellé</th><th class="n hide-m">HT</th><th class="n hide-m">TVA</th><th class="n">TTC</th><th class="n">Réglé</th><th class="hide-m">Par · réf.</th></tr>
     {% for p in purchases %}
-    <tr class="click {{ 'late' if not p.paid_date and p.due_date and p.due_date < today }}" data-href="{{ url_for('purchase_form', pid=p.id) }}">
+    <tr class="click {{ 'draft' if p.draft }} {{ 'late' if not p.draft and not p.paid_date and p.due_date and p.due_date < today }}" data-href="{{ url_for('purchase_form', pid=p.id) }}">
       <td>{{ p.invoice_date|date }}</td>
       <td class="hide-m small muted">{{ p.invoice_number or '' }}</td>
       <td><div class="t">{{ p.supplier_name or p.supplier }}
           {% if p.source == 'pdp' %}<span class="pill blue">reçue</span>{% elif p.source == 'recurrent' %}<span class="pill">récurrent</span>{% endif %}
-          {% if p.category == 'immobilisation' %}<span class="pill amber">immo.</span>{% endif %}</div>
+          {% if p.category == 'immobilisation' %}<span class="pill amber">immo.</span>{% endif %}
+          {% if p.draft %}<span class="pill green">brouillon</span>{% endif %}</div>
         {% if p.description %}<div class="st">{{ p.description }}</div>{% endif %}</td>
-      <td class="n hide-m">{{ p.total_ht|money }}</td><td class="n t">{{ p.total_ttc|money }}</td>
+      <td class="n hide-m">{{ p.total_ht|money }}</td><td class="n hide-m muted">{{ p.total_tva|money }}</td><td class="n t">{{ p.total_ttc|money }}</td>
       <td class="n">{% if p.paid_date %}{{ p.paid_date|date }}{% else %}
         <form method="post" action="{{ url_for('purchase_paid', pid=p.id) }}" class="row" style="flex-wrap:nowrap; justify-content:flex-end">
           <input type="date" name="date" value="{{ today }}" style="width:140px; padding:5px 8px"><button class="small primary">Payée</button></form>{% endif %}</td>
-      <td class="hide-m small muted">{{ p.method or '' }}</td>
+      <td class="hide-m small muted">{{ p.method or '' }}{% if p.payment_ref %}<div class="tiny" title="{{ p.payment_ref }}" style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ p.payment_ref }}</div>{% endif %}</td>
     </tr>
     {% endfor %}
   </table>

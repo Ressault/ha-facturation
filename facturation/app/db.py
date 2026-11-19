@@ -233,7 +233,30 @@ MIGRATIONS = [
     ("purchases", "monae_id", "INTEGER"),
     ("purchases", "recurring_id", "INTEGER"),
     ("purchases", "notes", "TEXT"),
+    ("purchases", "vat_rate", "REAL"),
+    ("purchases", "payment_ref", "TEXT"),
+    ("purchases", "draft", "INTEGER NOT NULL DEFAULT 0"),
+    ("payments", "reference", "TEXT"),
+    ("documents", "performed_on", "TEXT"),
+    ("documents", "external_number", "TEXT"),
 ]
+
+SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS urssaf_dues (
+    period TEXT PRIMARY KEY,          -- 'YYYY-Tn' ou 'YYYY-MM'
+    amount REAL NOT NULL,             -- cotisations réellement demandées par l'URSSAF
+    declared_ca REAL,
+    note TEXT
+);
+CREATE TABLE IF NOT EXISTS urssaf_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period TEXT NOT NULL,
+    date TEXT NOT NULL,
+    amount REAL NOT NULL,
+    reference TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+"""
 
 
 def connect():
@@ -262,6 +285,7 @@ def init_db():
     with transaction() as conn:
         conn.executescript(SCHEMA)
         conn.executescript(SCHEMA_V2)
+        conn.executescript(SCHEMA_V3)
         for table, col, decl in MIGRATIONS:
             cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if col not in cols:

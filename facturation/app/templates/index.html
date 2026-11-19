@@ -15,6 +15,11 @@
   {% for t in tasks %}{% include "_task.html" %}{% endfor %}
 </div>
 {% endif %}
+{% if arrears.total > 0 %}
+<div class="warn" style="display:flex; align-items:center; gap:10px"><span><b>Retard URSSAF : {{ arrears.total|money }}</b> de cotisations restant à payer
+  ({% for x in arrears.periods %}{{ x.period[-2:] ~ ' ' ~ x.period[:4] if '-T' in x.period else period_label(x.period) }}{{ ', ' if not loop.last }}{% endfor %}).</span>
+  <span class="spacer" style="flex:1"></span><a class="btn small" href="{{ url_for('urssaf', p=arrears.periods[0].period) }}">Saisir un règlement</a></div>
+{% endif %}
 {% if pdp_errors %}
 <div class="flash error">{{ pdp_errors }} facture{{ 's' if pdp_errors > 1 }} non transmise{{ 's' if pdp_errors > 1 }} à la plateforme agréée.
   <a href="{{ url_for('documents', kind='facture') }}">Voir</a></div>
@@ -24,7 +29,9 @@
   <div class="card kpi blue">
     <div class="l">Encaissé · {{ month_label }}</div>
     <div class="v">{{ amt(stats.mois.enc) }}</div>
-    <div class="s">Trimestre <b>{{ amt(stats.trimestre.enc) }}</b> · {{ year }} <b>{{ amt(stats.annee.enc) }}</b></div>
+    <div class="s">Trimestre <b>{{ amt(stats.trimestre.enc) }}</b> · {{ year }} <b>{{ amt(stats.annee.enc) }}</b>
+      {% if last_year.enc.ht > 0 %}{% set dv = ((stats.annee.enc.ht - last_year.enc.ht) / last_year.enc.ht * 100)|round|int %}
+      <span class="delta {{ 'up' if dv >= 0 else 'down' }}" title="À date, par rapport à {{ year - 1 }}">{{ '+' if dv >= 0 }}{{ dv }} % vs {{ year - 1 }}</span>{% endif %}</div>
   </div>
   <div class="card kpi">
     <div class="l">Facturé · {{ month_label }}</div>
@@ -60,7 +67,49 @@
       <span>Encaissé</span><span class="v">{{ amt(stats.annee.enc) }}</span>
       <span>Achats</span><span class="v">{{ amt(stats.annee.ach) }}</span>
     </div>
+    <div style="margin-top:16px">
+      <div class="row between small"><span class="muted">Plafond micro-entreprise (prestations)</span><b>{{ plafond.pct|string|replace('.', ',') }} %</b></div>
+      <div class="gauge"><i class="{{ 'bad' if plafond.pct >= 90 else 'warn' if plafond.pct >= 75 }}" style="width:{{ plafond.pct }}%"></i></div>
+      <div class="tiny muted">{{ plafond.ca|money }} encaissés HT sur {{ plafond.limit|int_fr }} € autorisés en {{ year }}</div>
+    </div>
   </div>
+</div>
+
+<div class="grid g21">
+<div class="card">
+  <h2>Encaisser un virement</h2>
+  <form method="get" action="{{ url_for('index') }}" class="row" style="flex-wrap:nowrap; align-items:flex-end; gap:8px">
+    <div style="flex:1"><label>Libellé de l'opération (copié depuis Qonto)</label>
+      <input name="virement" value="{{ transfer.label if transfer else '' }}" placeholder="ex. VIR SEPA SARL DRIPMOON FACTURE 475"></div>
+    <div style="width:130px"><label>Montant</label><input name="montant" inputmode="decimal" value="{{ request.args.get('montant', '') }}" placeholder="1 320,00"></div>
+    <button class="primary">Rechercher</button>
+  </form>
+  {% if transfer %}
+    {% if transfer.matches %}
+    <table class="boxed" style="margin-top:12px">
+      <thead><tr><th>Facture</th><th>Client</th><th class="n">Reste dû</th><th>Correspond par</th><th></th></tr></thead>
+      <tbody>{% for m in transfer.matches %}
+        <tr><td class="t"><a href="{{ url_for('doc_view', doc_id=m.doc.id) }}">{{ m.doc.number }}</a></td><td>{{ m.doc.client_name }}</td>
+          <td class="n">{{ m.rest|money }}</td><td class="small muted">{{ m.why|join(', ') }}</td>
+          <td class="n"><form method="post" action="{{ url_for('doc_payment', doc_id=m.doc.id) }}" style="margin:0">
+            <input type="hidden" name="date" value="{{ today }}"><input type="hidden" name="method" value="virement">
+            <input type="hidden" name="amount" value="{{ ('%.2f' % (transfer.amount if transfer.amount and transfer.amount <= m.rest + 0.001 else m.rest))|replace('.', ',') }}">
+            <input type="hidden" name="reference" value="{{ transfer.label }}">
+            <button class="small primary">Encaisser {{ (transfer.amount if transfer.amount and transfer.amount <= m.rest + 0.001 else m.rest)|money }}</button></form></td></tr>
+      {% endfor %}</tbody>
+    </table>
+    {% else %}<p class="small muted" style="margin:10px 0 0">Aucune facture à encaisser ne correspond (numéro, client ou montant).</p>{% endif %}
+  {% else %}<p class="tiny muted" style="margin:8px 0 0">L'app retrouve la facture d'après son numéro, le nom du client ou le montant, et garde le libellé comme référence de paiement.</p>{% endif %}
+</div>
+<div class="card">
+  <h2>Accès rapides</h2>
+  <div class="links">
+    <a href="{{ IMPOTS_URL }}" target="_blank" rel="noopener">impots.gouv <small>TVA ↗</small></a>
+    <a href="{{ URSSAF_URL }}" target="_blank" rel="noopener">URSSAF <small>auto-entrepreneur ↗</small></a>
+    <a href="{{ url_for('tva') }}">Montants CA3</a>
+    <a href="{{ url_for('urssaf') }}">Chiffre d'affaires URSSAF</a>
+  </div>
+</div>
 </div>
 
 <div class="card tight">

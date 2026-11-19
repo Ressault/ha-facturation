@@ -11,7 +11,10 @@
 <form class="card" method="get">
   <input type="hidden" name="kind" value="{{ kind }}">
   <div class="filters">
-    <div class="grow search"><input name="q" value="{{ f.q }}" placeholder="Client, objet ou numéro…"></div>
+    <div><label>Société</label><select name="client" onchange="this.form.submit()">
+      <option value="">Toutes les sociétés</option>
+      {% for co in companies %}<option value="{{ co.id }}" {{ 'selected' if f.client == co.id|string }}>{{ co.name }}</option>{% endfor %}</select></div>
+    <div class="grow search"><label>Recherche</label><input name="q" value="{{ f.q }}" placeholder="Objet, numéro ou client…"></div>
     <div><label>Affichage</label><select name="statut" onchange="this.form.submit()">
       {% if is_devis %}
         {% for v, l in [('', 'Tous'), ('en_attente', 'En attente'), ('accepte', 'Acceptés'), ('refuse', 'Refusés'), ('facture', 'Facturés')] %}

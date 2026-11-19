@@ -1,10 +1,10 @@
 {%- set k = ln.kind or 'item' -%}
 <tr class="k-{{ k }}" data-kind="{{ k }}">
   {%- if k == 'item' %}
+  <td><input name="quantity" inputmode="decimal" value="{{ ln.quantity|qty if ln.quantity not in ('', None) else '1' }}" style="text-align:right"></td>
   <td><input type="hidden" name="kind_line" value="item">
     <input name="designation" list="catalog" value="{{ ln.designation }}" placeholder="Prestation">
     <textarea name="description" class="desc" placeholder="Détail (facultatif)">{{ ln.description or '' }}</textarea></td>
-  <td><input name="quantity" inputmode="decimal" value="{{ ln.quantity|qty if ln.quantity not in ('', None) else '1' }}"></td>
   <td><select name="unit">{% for u in ['u', 'h', 'jour', 'forfait', 'image', 'mois', 'km', 'm2'] %}<option {{ 'selected' if (ln.unit or 'u') == u }}>{{ u }}</option>{% endfor %}
     {% if ln.unit and ln.unit not in ['u', 'h', 'jour', 'forfait', 'image', 'mois', 'km', 'm2'] %}<option selected>{{ ln.unit }}</option>{% endif %}</select></td>
   <td><input name="unit_price" inputmode="decimal" value="{{ ln.unit_price|qty if ln.unit_price not in ('', None) else '' }}"></td>
@@ -13,7 +13,7 @@
     {% for v, l in NATURES.items() %}<option value="{{ v }}" {{ 'selected' if (ln.nature or settings.default_nature) == v }}>{{ {'bnc': 'BNC', 'bic': 'BIC presta.', 'vente': 'Vente', 'debours': 'Débours'}[v] }}</option>{% endfor %}</select></td>
   <td class="n lt">0,00 €</td>
   {%- elif k == 'title' %}
-  <td colspan="6"><input type="hidden" name="kind_line" value="title"><input name="designation" value="{{ ln.designation }}" placeholder="Titre de section">
+  <td colspan="6"><input type="hidden" name="kind_line" value="title"><input name="designation" value="{{ ln.designation }}" placeholder="Titre de section" style="font-weight:700">
     <input type="hidden" name="description" value=""><input type="hidden" name="quantity" value=""><input type="hidden" name="unit" value=""><input type="hidden" name="unit_price" value=""><input type="hidden" name="vat_rate" value=""><input type="hidden" name="nature" value=""></td>
   <td class="tag n">Titre</td>
   {%- elif k == 'comment' %}

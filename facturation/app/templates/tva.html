@@ -8,6 +8,7 @@
   <div><h1>TVA · {{ period_label(period) }}</h1><div class="sub">Déclaration CA3 mensuelle · prestations de services (TVA sur les encaissements)</div></div>
   <span class="spacer"></span>
   {% if decl and decl.declared_at %}<span class="pill green" style="font-size:13px">Déclarée le {{ decl.declared_at[:10]|date }}</span>{% endif %}
+  <a class="btn primary" href="{{ IMPOTS_URL }}" target="_blank" rel="noopener">Ouvrir impots.gouv (espace pro) ↗</a>
 </div>
 
 {% if undated %}

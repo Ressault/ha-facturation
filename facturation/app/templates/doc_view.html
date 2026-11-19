@@ -1,49 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
 {% set is_inv = doc.kind == 'facture' %}
+{% set late = is_inv and doc.status in ('emise', 'partielle') and doc.due_date and doc.due_date < today %}
 <div class="head">
   <div class="docnav">
     <a class="btn icon {{ 'disabled' if not prev }}" href="{{ url_for('doc_view', doc_id=prev.id) if prev else '#' }}" title="{{ ('Précédent : ' ~ (prev.number or 'brouillon')) if prev else '' }}">‹</a>
     <a class="btn icon {{ 'disabled' if not nxt }}" href="{{ url_for('doc_view', doc_id=nxt.id) if nxt else '#' }}" title="{{ ('Suivant : ' ~ (nxt.number or 'brouillon')) if nxt else '' }}">›</a>
   </div>
-  <div>
-    <h1>{{ KIND_LABEL[doc.kind] }} {{ doc.number or '' }}</h1>
-    <div class="sub">{{ client.name }} · {{ doc.issue_date|date }}</div>
-  </div>
-  <span class="pill {{ STATUS[doc.status][1] }}" style="font-size:13px">{{ STATUS[doc.status][0] }}</span>
-  {% if doc.imported %}<span class="pill">importé de MonAE</span>{% endif %}
+  <h1>{{ KIND_LABEL[doc.kind] }} {% if doc.number %}n° {{ doc.number }}{% endif %}</h1>
+  {% if late %}<span class="pill orange">En retard</span>{% else %}<span class="pill {{ STATUS[doc.status][1] }}">{{ STATUS[doc.status][0] }}</span>{% endif %}
+  {% if doc.imported %}<span class="pill grey">importé de MonAE</span>{% endif %}
+  {% if doc.pdp_id %}<span class="pill blue" title="Plateforme agréée">{{ doc.pdp_status_text or 'Transmise' }}</span>{% endif %}
   <span class="spacer"></span>
-  <a class="btn" href="{{ url_for('doc_pdf', doc_id=doc.id) }}" target="_blank">Aperçu PDF</a>
-  <a class="btn" href="{{ url_for('doc_pdf', doc_id=doc.id, dl=1) }}">Télécharger</a>
-</div>
-
-<div class="actions" style="margin-bottom:18px">
-  {% if doc.kind == 'devis' %}
-    <form method="post" action="{{ url_for('doc_to_invoice', doc_id=doc.id) }}"><button class="primary">Transformer en facture</button></form>
+  {% if doc.status == 'brouillon' %}
     <a class="btn" href="{{ url_for('doc_edit', doc_id=doc.id) }}">Modifier</a>
-    <form method="post" action="{{ url_for('devis_status', doc_id=doc.id) }}">
-      <div class="seg">{% for s in ['en_attente', 'accepte', 'refuse'] %}<button name="status" value="{{ s }}" class="{{ 'on' if doc.status == s }}">{{ STATUS[s][0] }}</button>{% endfor %}</div></form>
-    <form method="post" action="{{ url_for('doc_duplicate', doc_id=doc.id) }}"><button>Dupliquer</button></form>
-    <form method="post" action="{{ url_for('doc_delete', doc_id=doc.id) }}" data-confirm="Supprimer définitivement ce devis ?"><button class="danger">Supprimer</button></form>
-  {% elif doc.status == 'brouillon' %}
-    <a class="btn primary" href="{{ url_for('doc_edit', doc_id=doc.id) }}">Modifier le brouillon</a>
     <form method="post" action="{{ url_for('doc_validate', doc_id=doc.id) }}" data-confirm="Finaliser ? Le numéro sera attribué définitivement."><button class="green">Finaliser</button></form>
-    <form method="post" action="{{ url_for('doc_duplicate', doc_id=doc.id) }}"><button>Dupliquer</button></form>
-    <form method="post" action="{{ url_for('doc_delete', doc_id=doc.id) }}" data-confirm="Supprimer ce brouillon ?"><button class="danger">Supprimer</button></form>
-  {% else %}
-    {% if is_inv %}
-      <form method="post" action="{{ url_for('doc_duplicate', doc_id=doc.id) }}"><button>Dupliquer</button></form>
-      {% if doc.status != 'annulee' %}
-      <form method="post" action="{{ url_for('doc_to_avoir', doc_id=doc.id) }}"><button>Avoir partiel</button></form>
-      <form method="post" action="{{ url_for('doc_delete', doc_id=doc.id) }}"
-            data-confirm="Supprimer la facture {{ doc.number }} ?&#10;&#10;La loi interdit d'effacer une facture finalisée : un avoir du même montant va être créé et finalisé automatiquement pour l'annuler{{ ' (et transmis au client)' if doc.pdp_id }}.">
-        <button class="danger">Supprimer</button></form>
-      {% endif %}
-    {% endif %}
-    {% if pdp_on and not doc.pdp_id and not doc.imported and client.kind == 'pro' %}
-      <form method="post" action="{{ url_for('doc_send', doc_id=doc.id) }}"><button class="primary">{{ "Réessayer l'envoi" if doc.pdp_error else 'Transmettre via la plateforme' }}</button></form>
-    {% endif %}
+  {% elif doc.kind == 'devis' %}
+    <form method="post" action="{{ url_for('doc_to_invoice', doc_id=doc.id) }}"><button class="primary">Transformer en facture</button></form>
   {% endif %}
+  <details class="menu-btn">
+    <summary>Actions ▾</summary>
+    <div class="pop">
+      <a href="{{ url_for('doc_pdf', doc_id=doc.id) }}" target="_blank">Aperçu PDF</a>
+      <a href="{{ url_for('doc_pdf', doc_id=doc.id, dl=1) }}">Télécharger le PDF</a>
+      {% if doc.kind == 'devis' or doc.status == 'brouillon' %}<a href="{{ url_for('doc_edit', doc_id=doc.id) }}">Modifier</a>{% endif %}
+      <form method="post" action="{{ url_for('doc_duplicate', doc_id=doc.id) }}"><button>Dupliquer</button></form>
+      {% if client_email and doc.status != 'brouillon' %}<a href="{{ mail_link }}">{{ 'Relancer le client par e-mail' if late else 'Envoyer par e-mail' }}</a>{% endif %}
+      {% if doc.kind == 'devis' %}
+        <hr>{% for s in ['en_attente', 'accepte', 'refuse'] %}
+        <form method="post" action="{{ url_for('devis_status', doc_id=doc.id) }}"><button name="status" value="{{ s }}">{{ '✓ ' if doc.status == s }}Marquer « {{ STATUS[s][0] }} »</button></form>{% endfor %}
+        <hr><form method="post" action="{{ url_for('doc_delete', doc_id=doc.id) }}" data-confirm="Supprimer définitivement ce devis ?"><button class="danger">Supprimer</button></form>
+      {% elif doc.status == 'brouillon' %}
+        <hr><form method="post" action="{{ url_for('doc_delete', doc_id=doc.id) }}" data-confirm="Supprimer ce brouillon ?"><button class="danger">Supprimer le brouillon</button></form>
+      {% elif is_inv and doc.status != 'annulee' %}
+        <form method="post" action="{{ url_for('doc_to_avoir', doc_id=doc.id) }}"><button>Créer un avoir partiel</button></form>
+        {% if pdp_on and not doc.pdp_id and not doc.imported and client.kind == 'pro' %}
+        <form method="post" action="{{ url_for('doc_send', doc_id=doc.id) }}"><button>{{ "Réessayer l'envoi à la plateforme" if doc.pdp_error else 'Transmettre via la plateforme' }}</button></form>{% endif %}
+        <hr><form method="post" action="{{ url_for('doc_delete', doc_id=doc.id) }}"
+            data-confirm="Supprimer la facture {{ doc.number }} ?&#10;&#10;La loi interdit d'effacer une facture finalisée : un avoir du même montant va être créé et finalisé automatiquement pour l'annuler{{ ' (et transmis au client)' if doc.pdp_id }}.">
+          <button class="danger">Supprimer (avoir automatique)</button></form>
+      {% endif %}
+    </div>
+  </details>
 </div>
 
 {% if doc.pdp_error and not doc.pdp_id and doc.status != 'brouillon' %}
@@ -54,91 +52,97 @@
   {% if paid > 0 %}Elle avait été encaissée : pensez à rembourser le client et à le noter sur l'avoir.{% endif %}</div>
 {% endif %}
 
-<div class="grid g21">
-  <div class="paper">
-    <div class="meta">
-      <div>
-        {% if doc.subject %}<h2 style="margin-bottom:4px">{{ doc.subject }}</h2>{% endif %}
-        {% if doc.service_date %}<div class="muted small">Réalisé : {{ doc.service_date }}</div>{% endif %}
-      </div>
-      <div class="client">
-        <div class="tiny muted" style="text-transform:uppercase; letter-spacing:.05em">{{ 'Destinataire' if doc.kind == 'devis' else 'Facturé à' }}</div>
-        <div class="t" style="font-weight:600">{{ client.name }}</div>
-        <div class="small muted">{{ client.address }}<br>{{ client.post_code }} {{ client.city }}</div>
-        {% if client.siren %}<div class="tiny muted">SIREN {{ client.siren }}</div>{% endif %}
-      </div>
-    </div>
-    <table>
-      <tr><th>Désignation</th><th class="n">Qté</th><th class="n hide-m">PU HT</th><th class="n hide-m">TVA</th><th class="n">Total HT</th></tr>
-      {% for ln in lines %}
-        {% set k = ln.kind or 'item' %}
-        {% if k == 'item' %}
-        <tr><td>{{ ln.designation }}{% if ln.description %}<div class="st">{{ ln.description }}</div>{% endif %}
-          {% if ln.nature and ln.nature != settings.default_nature %}<span class="pill" style="margin-top:3px">{{ {'bnc': 'BNC', 'bic': 'BIC', 'vente': 'Vente', 'debours': 'Débours'}[ln.nature] }}</span>{% endif %}</td>
-          <td class="n">{{ ln.quantity|qty }} {{ ln.unit }}</td><td class="n hide-m">{{ ln.unit_price|money }}</td>
-          <td class="n hide-m">{{ ln.vat_rate|rate }}</td><td class="n t">{{ (ln.quantity * ln.unit_price)|money }}</td></tr>
-        {% elif k == 'title' %}<tr class="k-title"><td colspan="5">{{ ln.designation }}</td></tr>
-        {% elif k == 'comment' %}<tr class="k-comment"><td colspan="5">{{ ln.designation }}</td></tr>
-        {% elif k == 'subtotal' %}<tr class="k-subtotal"><td colspan="4" class="n">{{ ln.designation }}</td><td class="n">{{ ln.subtotal|money }}</td></tr>
-        {% else %}<tr class="k-page"><td colspan="5">saut de page</td></tr>{% endif %}
-      {% endfor %}
-    </table>
-    <table class="totals">
-      <tr><td class="muted">Total HT</td><td>{{ t.ht|money }}</td></tr>
-      {% for r, b, v in t.breakdown %}<tr><td class="muted">TVA {{ r|rate }}</td><td>{{ v|money }}</td></tr>{% endfor %}
-      <tr class="big"><td>Total TTC</td><td>{{ t.ttc|money }}</td></tr>
-    </table>
-    {% if doc.notes %}<p class="small muted" style="margin-top:18px; white-space:pre-line">{{ doc.notes }}</p>{% endif %}
-  </div>
-
-  <div class="side">
-    <div class="card">
-      <dl class="kv">
-        <dt>Date</dt><dd>{{ doc.issue_date|date }}</dd>
-        {% if doc.due_date and is_inv %}<dt>Échéance</dt><dd>{{ doc.due_date|date }}</dd>{% endif %}
-        {% if doc.validity_date %}<dt>Validité</dt><dd>{{ doc.validity_date|date }}</dd>{% endif %}
-        {% if doc.payment_terms and doc.kind != 'avoir' %}<dt>Règlement</dt><dd>{{ TERMS.get(doc.payment_terms, doc.payment_terms) }}</dd>{% endif %}
-        {% if doc.penalty_rate %}<dt>Pénalités</dt><dd>{{ doc.penalty_rate|qty }} %</dd>{% endif %}
-        {% if doc.discount_rate %}<dt>Escompte</dt><dd>{{ doc.discount_rate|qty }} %</dd>{% endif %}
-        {% for o in origin %}<dt>{{ 'Devis' if o.kind == 'devis' else 'Sur facture' }}</dt><dd><a href="{{ url_for('doc_view', doc_id=o.id) }}">{{ o.number }}</a></dd>{% endfor %}
-        {% for f in invoices_from %}<dt>Facture</dt><dd><a href="{{ url_for('doc_view', doc_id=f.id) }}">{{ f.number or 'brouillon' }}</a></dd>{% endfor %}
-        {% for a in avoirs %}<dt>Avoir</dt><dd><a href="{{ url_for('doc_view', doc_id=a.id) }}">{{ a.number or 'brouillon' }}</a> · {{ a.total_ttc|money }}</dd>{% endfor %}
-        {% if doc.pdp_id %}<dt>Plateforme</dt><dd>{{ doc.pdp_status_text or 'Déposée' }}</dd>{% endif %}
-      </dl>
-    </div>
-
-    {% if doc.kind in ('facture', 'avoir') and doc.status != 'brouillon' %}
-    <div class="card">
-      <h3>{{ 'Remboursements' if doc.kind == 'avoir' else 'Encaissements' }}</h3>
-      {% if is_inv %}
-      <div class="row between" style="margin-bottom:8px">
-        <span class="muted small">Encaissé {{ paid|money }}{% if credited %} · avoirs {{ credited|money }}{% endif %}</span>
-        <b>{{ 'Reste ' ~ (remaining|money) if remaining > 0 else 'Soldée' }}</b>
-      </div>
-      {% endif %}
-      {% for p in payments %}
-      <div class="ev">
-        <span>{{ p.date|date }} · <b>{{ p.amount|money }}</b><span class="muted small">{% if p.method %} · {{ p.method }}{% endif %}</span>
-          {% if p.pdp_reported and 'MonAE' not in (p.method or '') and p.method != 'historique' %}<span class="pill green" title="Transmis à la plateforme agréée">transmis</span>{% endif %}
-          {% if p.pdp_error %}<span class="pill red" title="{{ p.pdp_error }}">non transmis</span>{% endif %}</span>
-        {% if not p.pdp_reported %}<form method="post" action="{{ url_for('payment_delete', payment_id=p.id) }}" data-confirm="Supprimer cet encaissement ?"><button class="small danger">✕</button></form>{% endif %}
-      </div>
-      {% endfor %}
-      {% if (is_inv and remaining > 0 and doc.status != 'annulee') or (doc.kind == 'avoir' and paid < doc.total_ttc) %}
-      <form method="post" action="{{ url_for('doc_payment', doc_id=doc.id) }}" style="margin-top:12px">
-        <div class="fields" style="grid-template-columns:1fr 1fr; margin-bottom:8px">
-          <div><label>Date</label><input type="date" name="date" value="{{ today }}"></div>
-          <div><label>Montant TTC</label><input name="amount" inputmode="decimal" value="{{ ('%.2f' % (remaining if is_inv else avoir_rest))|replace('.', ',') }}"></div>
-        </div>
-        <select name="method" style="margin-bottom:10px">{% for m in ['virement', 'chèque', 'carte', 'prélèvement', 'espèces', 'autre'] %}<option>{{ m }}</option>{% endfor %}</select>
-        <button class="primary" style="width:100%; justify-content:center">{{ 'Marquer remboursé' if doc.kind == 'avoir' else 'Marquer payée' }}</button>
-      </form>
-      {% if is_inv %}<p class="tiny muted" style="margin:10px 0 0">La TVA est comptée sur le mois de l'encaissement.</p>{% endif %}
-      {% endif %}
-    </div>
+<div class="card">
+  <div class="fgrid">
+    <div><label>Client</label><div class="ro">{% if doc.client_id %}<a href="{{ url_for('client_form', client_id=doc.client_id) }}">{{ client.name }}</a>{% else %}{{ client.name }}{% endif %}</div></div>
+    <div><label>Date</label><div class="ro">{{ doc.issue_date|date }}</div></div>
+    <div><label>Réalisé le</label><div class="ro {{ 'muted' if not doc.service_date }}">{{ doc.service_date or 'Non précisé' }}</div></div>
+    {% if doc.kind == 'devis' %}
+    <div><label>Valable jusqu'au</label><div class="ro {{ 'muted' if not doc.validity_date }}">{{ doc.validity_date|date if doc.validity_date else 'Non précisé' }}</div></div>
+    {% else %}
+    <div><label>Échéance</label><div class="ro" {% if late %}style="color:var(--orange); font-weight:600"{% endif %}>{{ doc.due_date|date if doc.due_date else '—' }}</div></div>
+    {% endif %}
+    <div class="w4"><label>Objet</label><div class="ro {{ 'muted' if not doc.subject }}">{{ doc.subject or 'Non précisé' }}</div></div>
+    <div><label>N° TVA client</label><div class="ro {{ 'muted' if not client.vat_number }}">{{ client.vat_number or 'Non précisé' }}</div></div>
+    <div><label>SIREN client</label><div class="ro {{ 'muted' if not client.siren }}">{{ client.siren or 'Non précisé' }}</div></div>
+    {% if doc.kind != 'avoir' %}
+    <div class="w2"><label>Conditions de règlement</label><div class="ro">{{ TERMS.get(doc.payment_terms, doc.payment_terms) if doc.payment_terms else 'Aucune condition spécifique' }}{% if doc.penalty_rate %} · pénalités {{ doc.penalty_rate|qty }} %{% endif %}{% if doc.discount_rate %} · escompte {{ doc.discount_rate|qty }} %{% endif %}</div></div>
+    {% else %}
+    <div class="w2"><label>Avoir sur</label><div class="ro">{% for o in origin %}{% if o.kind != 'devis' %}<a href="{{ url_for('doc_view', doc_id=o.id) }}">Facture {{ o.number }}</a>{% endif %}{% else %}—{% endfor %}</div></div>
     {% endif %}
   </div>
+
+  <table class="boxed">
+    <thead><tr><th class="n" style="width:56px">Qté</th><th>Libellé</th><th class="n hide-m" style="width:72px">TVA</th><th class="n" style="width:110px">PU HT</th>
+      <th class="n" style="width:115px">Tot. HT</th><th class="n hide-m" style="width:105px">Tot. TVA</th><th class="n" style="width:120px">Tot. TTC</th></tr></thead>
+    <tbody>
+    {% for ln in lines %}
+      {% set k = ln.kind or 'item' %}
+      {% if k == 'item' %}
+      {% set lht = ln.quantity * ln.unit_price %}{% set ltva = lht * (ln.vat_rate or 0) / 100 %}
+      <tr><td class="n">{{ ln.quantity|qty }}{% if ln.unit and ln.unit != 'u' %} <span class="muted small">{{ ln.unit }}</span>{% endif %}</td>
+        <td>{{ ln.designation }}{% if ln.description %}<div class="desc-ro">{{ ln.description }}</div>{% endif %}
+          {% if ln.nature and ln.nature != settings.default_nature %}<span class="pill grey" style="margin-top:3px">{{ {'bnc': 'BNC', 'bic': 'BIC', 'vente': 'Vente', 'debours': 'Débours'}[ln.nature] }}</span>{% endif %}</td>
+        <td class="n hide-m">{{ ln.vat_rate|rate }}</td><td class="n">{{ ln.unit_price|money }}</td>
+        <td class="n">{{ lht|money }}</td><td class="n hide-m">{{ ltva|money }}</td><td class="n">{{ (lht + ltva)|money }}</td></tr>
+      {% elif k == 'title' %}<tr class="k-title"><td></td><td colspan="6" style="white-space:pre-line">{{ ln.designation }}</td></tr>
+      {% elif k == 'comment' %}<tr class="k-comment"><td></td><td colspan="6" style="white-space:pre-line">{{ ln.designation }}</td></tr>
+      {% elif k == 'subtotal' %}<tr class="k-subtotal"><td></td><td colspan="3" class="n">{{ ln.designation }}</td><td class="n">{{ ln.subtotal|money }}</td><td class="hide-m"></td><td></td></tr>
+      {% else %}<tr class="k-page"><td colspan="7">saut de page</td></tr>{% endif %}
+    {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><td colspan="6">TOTAL HT</td><td>{{ t.ht|money }}</td></tr>
+      {% for r, b, v in t.breakdown %}<tr><td colspan="6">TVA {{ r|rate }}</td><td>{{ v|money }}</td></tr>{% endfor %}
+      <tr class="grand"><td colspan="6">TOTAL TTC</td><td>{{ t.ttc|money }}</td></tr>
+    </tfoot>
+  </table>
+  {% if doc.notes %}<div class="ro" style="margin-top:12px; white-space:pre-line">{{ doc.notes }}</div>{% endif %}
+  {% if invoices_from or avoirs or (origin and doc.kind != 'avoir') %}
+  <div class="small muted" style="margin-top:12px">
+    {% for o in origin %}{% if o.kind == 'devis' %}Issu du devis <a href="{{ url_for('doc_view', doc_id=o.id) }}">{{ o.number }}</a> · {% endif %}{% endfor %}
+    {% for f in invoices_from %}Facture <a href="{{ url_for('doc_view', doc_id=f.id) }}">{{ f.number or 'brouillon' }}</a> · {% endfor %}
+    {% for a in avoirs %}Avoir <a href="{{ url_for('doc_view', doc_id=a.id) }}">{{ a.number or 'brouillon' }}</a> ({{ a.total_ttc|money }}) · {% endfor %}
+  </div>{% endif %}
 </div>
+
+{% if doc.kind in ('facture', 'avoir') and doc.status != 'brouillon' %}
+<div class="card">
+  <div class="sec-h">{{ 'Remboursement' if doc.kind == 'avoir' else 'Règlement' }}
+    <span class="spacer"></span>
+    {% if is_inv %}<span class="small muted" style="text-transform:none; letter-spacing:0; font-weight:500">Encaissé {{ paid|money }}{% if credited %} · avoirs {{ credited|money }}{% endif %}</span>{% endif %}</div>
+  {% if payments %}
+  <table class="boxed" style="margin-bottom:14px">
+    <thead><tr><th style="width:110px">Date</th><th style="width:130px">Mode</th><th>Réf. du paiement</th><th class="n" style="width:120px">Montant</th><th style="width:50px"></th></tr></thead>
+    <tbody>
+    {% for p in payments %}
+    <tr><td>{{ p.date|date }}</td><td>{{ (p.method or '—')|capitalize }}</td>
+      <td class="small">{{ p.reference or '' }}
+        {% if p.pdp_reported and 'MonAE' not in (p.method or '') and p.method != 'historique' %}<span class="pill green" title="Transmis à la plateforme agréée">transmis</span>{% endif %}
+        {% if p.pdp_error %}<span class="pill red" title="{{ p.pdp_error }}">non transmis</span>{% endif %}</td>
+      <td class="n t">{{ p.amount|money }}</td>
+      <td class="center">{% if not p.pdp_reported %}<form method="post" action="{{ url_for('payment_delete', payment_id=p.id) }}" data-confirm="Supprimer cet encaissement ?"><button class="small ghost" title="Supprimer" style="color:var(--red)">✕</button></form>{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if (is_inv and remaining > 0 and doc.status != 'annulee') or (doc.kind == 'avoir' and paid < doc.total_ttc) %}
+  <form method="post" action="{{ url_for('doc_payment', doc_id=doc.id) }}">
+    <div class="fgrid" style="margin-bottom:0">
+      <div><label>Reste dû</label><div class="ro" style="font-weight:600">{{ (remaining if is_inv else avoir_rest)|money }}</div></div>
+      <div><label>Mode de règlement</label><select name="method">{% for m in ['virement', 'chèque', 'carte', 'prélèvement', 'paypal', 'espèces', 'autre'] %}<option value="{{ m }}">{{ m|capitalize }}</option>{% endfor %}</select></div>
+      <div><label>{{ 'Remboursé le' if doc.kind == 'avoir' else 'Payé le' }}</label><input type="date" name="date" value="{{ today }}"></div>
+      <div><label>Montant TTC</label><input name="amount" inputmode="decimal" value="{{ ('%.2f' % (remaining if is_inv else avoir_rest))|replace('.', ',') }}"></div>
+      <div class="w4"><label>Réf. du paiement</label><input name="reference" placeholder="Collez ici le libellé du virement Qonto (ex. VIR SEPA SARL DRIPMOON FACT 475)"></div>
+    </div>
+    <div class="formbar">
+      {% if is_inv %}<span class="tiny muted left">La TVA est comptée sur le mois de l'encaissement.</span>{% endif %}
+      <button class="primary">{{ 'Enregistrer le remboursement' if doc.kind == 'avoir' else 'Enregistrer le règlement' }}</button>
+    </div>
+  </form>
+  {% elif is_inv and doc.status == 'payee' %}<p class="small muted" style="margin:0">Facture soldée.</p>{% endif %}
+</div>
+{% endif %}
 {% endblock %}
 {% block scripts %}
 <script>
@@ -147,5 +151,6 @@ document.addEventListener('keydown', e => {
   {% if prev %}if (e.key === 'ArrowLeft') location = '{{ url_for("doc_view", doc_id=prev.id) }}';{% endif %}
   {% if nxt %}if (e.key === 'ArrowRight') location = '{{ url_for("doc_view", doc_id=nxt.id) }}';{% endif %}
 });
+document.addEventListener('click', e => { document.querySelectorAll('details.menu-btn[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); }); });
 </script>
 {% endblock %}

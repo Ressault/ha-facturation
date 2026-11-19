@@ -5,11 +5,19 @@
     <a class="btn icon" href="{{ url_for('urssaf', p=prev) }}">‹</a>
     <a class="btn icon" href="{{ url_for('urssaf', p=nxt) }}">›</a>
   </div>
-  <div><h1>URSSAF · {{ label }}</h1><div class="sub">Recettes encaissées du {{ start|date }} au {{ end|date }} · à déclarer sur autoentrepreneur.urssaf.fr avant le {{ due|date }}</div></div>
+  <div><h1>URSSAF · {{ label }}</h1><div class="sub">Recettes encaissées du {{ start|date }} au {{ end|date }} · à déclarer et payer avant le {{ due|date }}</div></div>
+  {% if done %}<span class="pill green">Déclaré</span>{% endif %}
+  {% if cur and cur.rest > 0 %}<span class="pill {{ 'orange' if cur.late else 'blue' }}">{{ 'Retard' if cur.late else 'Reste à payer' }} {{ cur.rest|money }}</span>
+  {% elif cur and cur.due > 0 %}<span class="pill green">Cotisations payées</span>{% endif %}
   <span class="spacer"></span>
-  {% if done %}<span class="pill green" style="font-size:13px">Déclaré</span>{% endif %}
+  <a class="btn primary" href="{{ URSSAF_URL }}" target="_blank" rel="noopener">Ouvrir autoentrepreneur.urssaf.fr ↗</a>
 </div>
-<div class="note" style="margin-bottom:18px">Outil d'aide : il ne déclare rien à votre place. Vérifiez les montants avant de les reporter.</div>
+
+{% if arrears.total > 0 %}
+<div class="warn"><b>Retard URSSAF : {{ arrears.total|money }}</b> restant à payer sur
+  {% for x in arrears.periods %}<a href="{{ url_for('urssaf', p=x.period) }}">{{ x.period[-2:] ~ ' ' ~ x.period[:4] if '-T' in x.period else period_label(x.period) }}</a> ({{ x.rest|money }}){{ ', ' if not loop.last }}{% endfor %}.</div>
+{% endif %}
+
 <div class="grid g2">
   <div class="card tight">
     <h2>Recettes à déclarer</h2>
@@ -19,6 +27,12 @@
       <tr><td>Prestations non commerciales (BNC)</td><td class="v"><span class="copy">{{ r.ca.bnc }}</span> €</td></tr>
       <tr class="dim"><td>Débours (non déclarés)</td><td class="v">{{ r.ca.debours }} €</td></tr>
     </table>
+    <div style="padding:10px 18px 12px">
+      <form method="post" action="{{ url_for('task_toggle', task_id='urssaf:' ~ period) }}" style="margin:0">
+        {% if done %}<input type="hidden" name="undo" value="1"><button class="small">Annuler « déclaré »</button>
+        {% else %}<button class="green">✓ J'ai déclaré ce chiffre d'affaires</button>{% endif %}
+      </form>
+    </div>
   </div>
   <div class="card tight">
     <h2>Montants à payer (estimation)</h2>
@@ -27,10 +41,39 @@
       {% for l in r.lines %}{% if l.base %}
       <tr><td>{{ l.label }}</td><td class="n">{{ l.base|int_fr }} €</td><td class="n">{{ l.rate|rate }}</td><td class="n t">{{ l.amount|int_fr }} €</td></tr>
       {% endif %}{% endfor %}
-      <tr><td><b>Total</b></td><td></td><td></td><td class="n"><b style="font-size:18px">{{ r.total|int_fr }} €</b></td></tr>
+      <tr><td><b>Total estimé</b></td><td></td><td></td><td class="n"><b style="font-size:16px">{{ r.total|int_fr }} €</b></td></tr>
     </table>
   </div>
 </div>
+
+<div class="card">
+  <div class="sec-h">Paiement des cotisations · {{ label }}<span class="spacer"></span>
+    {% if cur %}<span class="small" style="text-transform:none; letter-spacing:0; color:var(--ink-2)">Demandé {{ cur.due|money }} · payé {{ cur.paid|money }} · <b style="color:{{ 'var(--orange)' if cur.rest > 0 else 'var(--green)' }}">reste {{ cur.rest|money }}</b></span>{% endif %}</div>
+  <form method="post" action="{{ url_for('urssaf_due', period=period) }}" class="fgrid" style="margin-bottom:12px">
+    <div><label>Cotisations demandées par l'URSSAF</label><input name="amount" inputmode="decimal" value="{{ ('%.2f' % (cur.due if cur else r.total))|replace('.', ',') }}"></div>
+    <div style="align-self:end"><button>Enregistrer le montant</button></div>
+    <div class="w2 help" style="align-self:end">Reprenez le montant exact affiché par l'URSSAF après votre déclaration (l'estimation ci-dessus sert de valeur par défaut).</div>
+  </form>
+  {% if pays %}
+  <table class="boxed" style="margin-bottom:12px">
+    <thead><tr><th style="width:110px">Date</th><th>Réf. du paiement</th><th class="n" style="width:120px">Montant</th><th style="width:50px"></th></tr></thead>
+    <tbody>{% for p in pays %}
+      <tr><td>{{ p.date|date }}</td><td class="small">{{ p.reference or '' }}</td><td class="n t">{{ p.amount|money }}</td>
+        <td class="center"><form method="post" action="{{ url_for('urssaf_pay_delete', pid=p.id) }}" data-confirm="Supprimer ce règlement ?"><button class="small ghost" style="color:var(--red)">✕</button></form></td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% endif %}
+  {% if not cur or cur.rest > 0 %}
+  <form method="post" action="{{ url_for('urssaf_pay', period=period) }}" class="fgrid" style="margin-bottom:0">
+    <div><label>Payé le</label><input type="date" name="date" value="{{ today }}"></div>
+    <div><label>Montant payé</label><input name="amount" inputmode="decimal" value="{{ ('%.2f' % (cur.rest if cur else r.total))|replace('.', ',') }}"></div>
+    <div class="w2"><label>Réf. du paiement</label><input name="reference" placeholder="ex. PRLV SEPA URSSAF …"></div>
+    <div class="w4 formbar" style="margin-top:0"><span class="tiny muted left">Payé en partie faute de trésorerie ? Saisissez ce qui a été réglé : le reste apparaît en retard sur l'accueil.</span>
+      <button class="primary">Enregistrer le règlement</button></div>
+  </form>
+  {% endif %}
+</div>
+
 <div class="card tight">
   <div class="summary">
     <div>Nombre de factures<b>{{ r.n_docs }}</b></div>
@@ -47,11 +90,24 @@
     {% else %}<tr><td colspan="5" class="empty">Aucun encaissement sur la période.</td></tr>{% endfor %}
   </table>
 </div>
-<form method="post" action="{{ url_for('task_toggle', task_id='urssaf:' ~ period) }}">
-  {% if done %}<input type="hidden" name="undo" value="1"><button class="small">Annuler « déclaré »</button>
-  {% else %}<button class="green">✓ J'ai déclaré ce chiffre d'affaires</button>{% endif %}
-</form>
-<p class="small muted" style="margin-top:14px">Taux modifiables dans <a href="{{ url_for('settings_page') }}#declarations">Réglages → TVA et URSSAF</a>. La nature (BNC, BIC, vente, débours) se choisit ligne par ligne sur les factures.</p>
+
+{% if ledger %}
+<div class="card tight">
+  <h2>Historique des cotisations</h2>
+  <table class="list">
+    <tr><th>Période</th><th class="n hide-m">CA déclaré</th><th class="n">Demandé</th><th class="n">Payé</th><th class="n">Reste</th><th class="hide-m">Date limite</th></tr>
+    {% for x in ledger %}
+    <tr class="click {{ 'late' if x.late }}" data-href="{{ url_for('urssaf', p=x.period) }}">
+      <td class="t">{{ x.period[-2:] ~ ' ' ~ x.period[:4] if '-T' in x.period else period_label(x.period) }}</td>
+      <td class="n hide-m">{{ x.declared_ca|int_fr ~ ' €' if x.declared_ca is not none else '—' }}</td>
+      <td class="n">{{ x.due|money }}</td><td class="n">{{ x.paid|money }}</td>
+      <td class="n t">{% if x.rest > 0 %}<span style="color:var(--orange)">{{ x.rest|money }}</span>{% else %}<span class="pill green">Soldé</span>{% endif %}</td>
+      <td class="hide-m">{{ x.deadline|date }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+<p class="small muted">Taux modifiables dans <a href="{{ url_for('settings_page') }}#declarations">Réglages → TVA et URSSAF</a>. La nature (BNC, BIC, vente, débours) se choisit ligne par ligne sur les factures.</p>
 {% endblock %}
 {% block scripts %}
 <script>

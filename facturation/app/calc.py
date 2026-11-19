@@ -288,7 +288,7 @@ def compute_period(conn, period: str):
     # --- TVA déductible
     ded = conn.execute(
         """SELECT category, COALESCE(SUM(total_tva), 0) AS tva, COUNT(*) AS n
-           FROM purchases WHERE deduction_date >= ? AND deduction_date < ?
+           FROM purchases WHERE deduction_date >= ? AND deduction_date < ? AND COALESCE(draft, 0) = 0
            GROUP BY category""",
         (start, end),
     ).fetchall()

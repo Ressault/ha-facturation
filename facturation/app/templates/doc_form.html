@@ -3,13 +3,9 @@
 {% set is_devis = doc.kind == 'devis' %}
 <form method="post" action="{{ url_for('doc_save') }}" id="docform">
 <div class="head">
-  <div>
-    <h1>{% if doc.id %}{{ KIND_LABEL[doc.kind] }} {{ doc.number or '' }}{% else %}{{ 'Nouveau devis' if is_devis else 'Nouvelle facture' }}{% endif %}
-      {% if doc.status == 'brouillon' %}<span class="pill green" style="vertical-align:middle">Brouillon</span>{% endif %}</h1>
-    {% if preview %}<div class="sub">Numéro attribué {{ 'à la finalisation' if not is_devis else '' }} : {{ preview }}</div>{% endif %}
-  </div>
-  <span class="spacer"></span>
-  <a class="btn" href="{{ url_for('doc_view', doc_id=doc.id) if doc.id else url_for('documents', kind=doc.kind) }}">Annuler</a>
+  <h1>{% if doc.id %}{{ KIND_LABEL[doc.kind] }} {% if doc.number %}n° {{ doc.number }}{% endif %}{% else %}{{ 'Nouveau devis' if is_devis else ('Nouvel avoir' if doc.kind == 'avoir' else 'Nouvelle facture') }}{% endif %}</h1>
+  {% if doc.status == 'brouillon' or not doc.id %}<span class="pill green">Brouillon</span>{% endif %}
+  {% if preview %}<span class="small muted">Numéro {{ 'attribué à la finalisation' if not is_devis else '' }} : {{ preview }}</span>{% endif %}
 </div>
 
   <input type="hidden" name="id" value="{{ doc.id or '' }}">
@@ -17,89 +13,80 @@
   <input type="hidden" name="avoir_of_id" value="{{ doc.avoir_of_id or '' }}">
   <input type="hidden" name="source_devis_id" value="{{ doc.source_devis_id or '' }}">
 
-  <div class="grid g21">
-    <div class="card" style="margin:0">
-      <div class="fields">
-        <div class="wide"><label>Client</label>
-          <div class="row" style="flex-wrap:nowrap">
-            <select name="client_id" required>
-              <option value="">Choisir un client…</option>
-              {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if doc.client_id == c.id }}>{{ c.name }}{% if c.kind == 'particulier' %} (particulier){% endif %}</option>{% endfor %}
-            </select>
-            <a class="btn" href="{{ url_for('client_form', next=doc.kind if doc.kind != 'avoir' else 'facture') }}">＋</a>
-          </div></div>
-        <div class="wide"><label>Objet</label><input name="subject" value="{{ doc.subject or '' }}" placeholder="ex. Rendus 3D — Les Chalets des Claux, Vars"></div>
-        <div><label>Date</label><input type="date" name="issue_date" id="issue_date" value="{{ doc.issue_date or '' }}"></div>
-        <div><label>Réalisé le / période</label><input name="service_date" value="{{ doc.service_date or '' }}" placeholder="ex. novembre 2026"></div>
-      </div>
-    </div>
-    <div class="card" style="margin:0">
-      {% if is_devis %}
-        <label>Valable jusqu'au</label><input type="date" name="validity_date" value="{{ doc.validity_date or '' }}">
-      {% endif %}
-      {% if doc.kind != 'avoir' %}
-      <div class="fields" style="grid-template-columns:1fr; margin-top:{{ '12px' if is_devis else '0' }}">
-        <div><label>Conditions de règlement</label>
-          <select name="payment_terms" id="payment_terms">
-            {% for v, l in PAYMENT_TERMS %}<option value="{{ v }}" {{ 'selected' if (doc.payment_terms or settings.default_payment_terms) == v }}>{{ l }}</option>{% endfor %}
-          </select></div>
-        {% if not is_devis %}
-        <div><label>Échéance</label><input type="date" name="due_date" id="due_date" value="{{ doc.due_date or '' }}">
-          <div class="help" id="due_help">Calculée d'après les conditions de règlement.</div></div>
-        {% endif %}
-      </div>
-      <div class="fields" style="grid-template-columns:1fr 1fr; margin:0">
-        <div><label>Pénalités de retard</label><div class="row" style="flex-wrap:nowrap"><input name="penalty_rate" inputmode="decimal" value="{{ doc.penalty_rate|qty if doc.penalty_rate not in (None, '') else '' }}" placeholder="taux légal ×3"><span class="muted">%</span></div></div>
-        <div><label>Escompte</label><div class="row" style="flex-wrap:nowrap"><input name="discount_rate" inputmode="decimal" value="{{ doc.discount_rate|qty if doc.discount_rate not in (None, '') else '' }}" placeholder="aucun"><span class="muted">%</span></div></div>
-      </div>
-      {% endif %}
-    </div>
+<div class="card">
+  <div class="fgrid">
+    <div class="w2"><label>Client</label>
+      <div class="row" style="flex-wrap:nowrap; gap:6px">
+        <select name="client_id" required>
+          <option value="">Choisir un client…</option>
+          {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if doc.client_id == c.id }}>{{ c.name }}{% if c.kind == 'particulier' %} (particulier){% endif %}</option>{% endfor %}
+        </select>
+        <a class="btn icon" title="Nouveau client" href="{{ url_for('client_form', next=doc.kind if doc.kind != 'avoir' else 'facture') }}">＋</a>
+      </div></div>
+    <div><label>Date</label><input type="date" name="issue_date" id="issue_date" value="{{ doc.issue_date or '' }}"></div>
+    <div><label>Réalisé le</label><input name="service_date" value="{{ doc.service_date or '' }}" placeholder="Non précisé"></div>
+    <div class="w4"><label>Objet</label><input name="subject" value="{{ doc.subject or '' }}" placeholder="ex. Nexity, Poitiers Grimoire — deux perspectives + plan de masse"></div>
+    {% if doc.kind != 'avoir' %}
+    <div class="w2"><label>Conditions de règlement</label>
+      <select name="payment_terms" id="payment_terms">
+        {% for v, l in PAYMENT_TERMS %}<option value="{{ v }}" {{ 'selected' if (doc.payment_terms or settings.default_payment_terms) == v }}>{{ l }}</option>{% endfor %}
+      </select></div>
+    {% if is_devis %}
+    <div><label>Valable jusqu'au</label><input type="date" name="validity_date" value="{{ doc.validity_date or '' }}"></div>
+    {% else %}
+    <div><label>Échéance</label><input type="date" name="due_date" id="due_date" value="{{ doc.due_date or '' }}" title="Calculée d'après les conditions de règlement"></div>
+    {% endif %}
+    <div><label>Pénalités · escompte (%)</label>
+      <div class="row" style="flex-wrap:nowrap; gap:6px">
+        <input name="penalty_rate" inputmode="decimal" value="{{ doc.penalty_rate|qty if doc.penalty_rate not in (None, '') else '' }}" placeholder="pénalités" title="Pénalités de retard en %">
+        <input name="discount_rate" inputmode="decimal" value="{{ doc.discount_rate|qty if doc.discount_rate not in (None, '') else '' }}" placeholder="escompte" title="Escompte en %">
+      </div></div>
+    {% endif %}
   </div>
 
-  <div class="card">
-    <div class="row between"><h2 style="margin:0">Lignes</h2>
-      <span class="small muted">Flèches ↑ ↓ pour réordonner les lignes</span></div>
-    <datalist id="catalog">{% for c in catalog %}<option value="{{ c.designation }}">{% endfor %}</datalist>
-    <table class="lines" id="lines">
-      <thead><tr><th>Désignation</th><th style="width:72px">Qté</th><th style="width:88px">Unité</th><th style="width:110px">PU HT</th>
-        <th style="width:84px">TVA</th><th style="width:130px" class="hide-m">Nature</th><th class="n" style="width:110px">Total HT</th><th style="width:84px"></th></tr></thead>
-      <tbody>
-      {% for ln in lines %}{% include "_line.html" %}{% endfor %}
-      </tbody>
-    </table>
-    <template id="tpl-item">{% with ln = {'kind': 'item', 'designation': '', 'quantity': 1, 'unit': 'u', 'unit_price': '', 'vat_rate': settings.default_vat_rate|float, 'nature': settings.default_nature} %}{% include "_line.html" %}{% endwith %}</template>
-    <template id="tpl-title">{% with ln = {'kind': 'title', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
-    <template id="tpl-subtotal">{% with ln = {'kind': 'subtotal', 'designation': 'Sous-total'} %}{% include "_line.html" %}{% endwith %}</template>
-    <template id="tpl-comment">{% with ln = {'kind': 'comment', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
-    <template id="tpl-page">{% with ln = {'kind': 'page', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
-    <div class="addbar">
-      <button type="button" data-add="item">＋ Ligne</button>
-      <button type="button" class="alt" data-add="title">＋ Titre</button>
-      <button type="button" class="alt" data-add="subtotal">＋ Sous-total</button>
-      <button type="button" class="alt" data-add="comment">＋ Commentaire</button>
-      <button type="button" class="alt" data-add="page">＋ Saut de page</button>
-    </div>
-    <table class="totals">
-      <tr><td class="muted">Total HT</td><td id="tht">0,00 €</td></tr>
+  <datalist id="catalog">{% for c in catalog %}<option value="{{ c.designation }}">{% endfor %}</datalist>
+  <table class="lines boxed" id="lines">
+    <thead><tr><th class="n" style="width:68px">Qté</th><th>Libellé</th><th style="width:86px">Unité</th><th style="width:105px">PU HT</th>
+      <th style="width:80px">TVA</th><th style="width:118px" class="hide-m">Nature</th><th class="n" style="width:105px">Tot. HT</th><th style="width:88px"></th></tr></thead>
+    <tbody>
+    {% for ln in lines %}{% include "_line.html" %}{% endfor %}
+    </tbody>
+  </table>
+  <div class="toolbar">
+    <button type="button" data-add="item">＋ Ligne</button>
+    <button type="button" data-add="title">＋ Titre</button>
+    <button type="button" data-add="subtotal">＋ Sous-total</button>
+    <button type="button" data-add="comment">＋ Commentaire</button>
+    <button type="button" data-add="page">＋ Saut de page</button>
+    <span class="spacer" style="flex:1"></span><span class="tiny muted" style="align-self:center">↑ ↓ pour réordonner</span>
+  </div>
+  <template id="tpl-item">{% with ln = {'kind': 'item', 'designation': '', 'quantity': 1, 'unit': 'u', 'unit_price': '', 'vat_rate': settings.default_vat_rate|float, 'nature': settings.default_nature} %}{% include "_line.html" %}{% endwith %}</template>
+  <template id="tpl-title">{% with ln = {'kind': 'title', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
+  <template id="tpl-subtotal">{% with ln = {'kind': 'subtotal', 'designation': 'Sous-total'} %}{% include "_line.html" %}{% endwith %}</template>
+  <template id="tpl-comment">{% with ln = {'kind': 'comment', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
+  <template id="tpl-page">{% with ln = {'kind': 'page', 'designation': ''} %}{% include "_line.html" %}{% endwith %}</template>
+
+  <div class="row" style="align-items:flex-start; margin-top:14px; gap:18px">
+    <div style="flex:1; min-width:260px"><label>Note en bas du document (facultatif)</label>
+      <textarea name="notes" placeholder="ex. Acompte de 30 % à la commande" style="min-height:96px">{{ doc.notes or '' }}</textarea></div>
+    <table class="boxed" style="width:320px">
+      <tbody><tr><td>TOTAL HT</td><td class="n t" id="tht">0,00 €</td></tr></tbody>
       <tbody id="tvat"></tbody>
-      <tr class="big"><td>Total TTC</td><td id="tttc">0,00 €</td></tr>
+      <tfoot><tr class="grand"><td style="text-align:left">TOTAL TTC</td><td id="tttc">0,00 €</td></tr></tfoot>
     </table>
   </div>
 
-  <div class="card">
-    <label>Note en bas du document (facultatif)</label>
-    <textarea name="notes" placeholder="ex. Acompte de 30 % à la commande">{{ doc.notes or '' }}</textarea>
-  </div>
-
-  <div class="sticky-actions">
+  <div class="formbar">
+    <a class="btn" href="{{ url_for('doc_view', doc_id=doc.id) if doc.id else url_for('documents', kind=doc.kind if doc.kind != 'avoir' else 'facture') }}">Annuler</a>
     {% if is_devis %}
       <button class="primary" name="action" value="enregistrer">Enregistrer le devis</button>
     {% else %}
       <button name="action" value="enregistrer">Enregistrer en brouillon</button>
       {% set what = "l'avoir" if doc.kind == 'avoir' else 'la facture' %}
-      <button class="green" name="action" value="valider" data-msg="Finaliser {{ what }} ? Le numéro sera attribué définitivement et le document ne pourra plus être modifié{{ ' ; il sera transmis au client via la plateforme agréée' if pdp_on and settings.pdp_auto_send == '1' }}." onclick="return confirm(this.dataset.msg)">Finaliser {{ what }}</button>
+      <button class="primary" name="action" value="valider" data-msg="Finaliser {{ what }} ? Le numéro sera attribué définitivement et le document ne pourra plus être modifié{{ ' ; il sera transmis au client via la plateforme agréée' if pdp_on and settings.pdp_auto_send == '1' }}." onclick="return confirm(this.dataset.msg)">Finaliser {{ what }}</button>
     {% endif %}
   </div>
+</div>
 </form>
 {% endblock %}
 {% block scripts %}
@@ -124,7 +111,7 @@ function recalc() {
   let tva = 0, rows = '';
   Object.keys(vat).sort((a, b) => b - a).forEach(r => {
     const t = r2(r2(vat[r]) * r / 100); tva += t;
-    rows += `<tr><td class="muted">TVA ${String(r).replace('.', ',')} %</td><td>${fmt(t)}</td></tr>`;
+    rows += `<tr><td>TVA ${String(r).replace('.', ',')} %</td><td class="n">${fmt(t)}</td></tr>`;
   });
   document.getElementById('tvat').innerHTML = rows;
   document.getElementById('tht').textContent = fmt(ht);

@@ -6,8 +6,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Facturation{% endblock %}</title>
-<script>try { document.documentElement.dataset.theme = localStorage.getItem('factu-theme') || 'dark'; } catch (e) { document.documentElement.dataset.theme = 'dark'; }</script>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=30">
+<script>try { document.documentElement.dataset.theme = localStorage.getItem('factu-theme') || 'light'; } catch (e) { document.documentElement.dataset.theme = 'light'; }</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=40">
 </head>
 <body>
 <header class="top"><div class="inner">
@@ -42,6 +42,8 @@
       <div class="drop">
         <a href="{{ url_for('tva') }}">TVA <small>mensuelle</small></a>
         <a href="{{ url_for('urssaf') }}">Chiffre d'affaires URSSAF <small>{{ 'mensuel' if settings.urssaf_period == 'mois' else 'trimestriel' }}</small></a>
+        <hr><a href="{{ IMPOTS_URL }}" target="_blank" rel="noopener">impots.gouv — espace pro <small>↗</small></a>
+        <a href="{{ URSSAF_URL }}" target="_blank" rel="noopener">autoentrepreneur.urssaf.fr <small>↗</small></a>
       </div>
     </div>
     <div class="item {{ 'on' if ep == 'export_page' }}"><a href="{{ url_for('export_page') }}">Export</a></div>
@@ -104,7 +106,7 @@ document.querySelectorAll('form.task-check').forEach(f => f.addEventListener('su
   await fetch(f.action, {method: 'POST', headers: {'X-Requested-With': 'fetch'}, body: new FormData(f)});
   const t = f.closest('.task'); t.classList.add('hide'); setTimeout(() => t.remove(), 300);
 }));
-// thème clair / sombre (sombre par défaut, comme le tableau de bord Maison)
+// thème clair (par défaut) / sombre
 const themeBtn = document.getElementById('theme');
 function paintTheme() { themeBtn.textContent = document.documentElement.dataset.theme === 'light' ? '☾' : '☀'; }
 themeBtn.addEventListener('click', () => {

@@ -458,7 +458,7 @@ def test_v3_periods_avoirs_recurring(env):
     assert appmod.period_range("a-2016", today=today) == ("2016-01-01", "2017-01-01")
     groups = appmod.period_groups(today)
     flat = [v for _, opts in groups for v, _ in opts]
-    assert flat[:3] == ["tout", "12m", "m-2026-11"] and "m-2026-01" in flat and "t-2026-4" in flat
+    assert flat[:3] == ["tout", "12m", "m-2026-01"] and flat[13] == "m-2026-12" and "t-2026-4" in flat
     assert "a-2026" in flat and "a-2016" in flat and flat[-1] == "perso"
     assert appmod.period_choice("trimestre", today) == "t-2026-4"
 
@@ -502,3 +502,56 @@ def test_v3_periods_avoirs_recurring(env):
         assert res.status_code == 200, (url, res.status_code)
     html = client.get("/documents?periode=t-2025-3&type=encaisse_le").get_data(as_text=True)
     assert "T3-A1" in html and "T3-1" in html and "T3-A2" not in html
+
+
+def test_v4_purchase_vat_urssaf_filters(env):
+    appmod, db, client = env
+    import logic
+    from datetime import date
+    # dépense saisie en TTC avec TVA récupérable à 20 %
+    r = client.post("/achats/nouveau", data={"supplier_new": "Adobe", "description": "Photoshop", "invoice_date": "2026-11-02",
+                                             "total_ttc": "24,00", "vat_rate": "20", "total_tva": "", "method": "carte",
+                                             "payment_ref": "CB ADOBE *PHOTOSHOP", "next": "new"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/achats/nouveau")
+    conn = db.connect()
+    p = conn.execute("SELECT * FROM purchases WHERE supplier='Adobe'").fetchone()
+    assert (p["total_tva"], p["total_ht"], p["paid_date"], p["payment_ref"], p["vat_rate"]) == (4.0, 20.0, "2026-11-02", "CB ADOBE *PHOTOSHOP", 20.0)
+    # montant libre et brouillon non compté
+    client.post("/achats/nouveau", data={"supplier_pick": "Adobe", "total_ttc": "10", "vat_rate": "", "total_tva": "1,5",
+                                         "invoice_date": "2026-11-03", "draft": "1"})
+    d2 = conn.execute("SELECT * FROM purchases WHERE total_ttc=10").fetchone()
+    assert d2["total_ht"] == 8.5 and d2["draft"] == 1 and d2["supplier_id"] == p["supplier_id"]
+    html = client.get(f"/achats?periode=tout&fournisseur={p['supplier_id']}").get_data(as_text=True)
+    assert "Photoshop" in html and "brouillon" in html
+    # filtre société sur les factures
+    cid = make_client(client)
+    other = make_client(client, name="Autre client", siren="552100554")
+    new_doc(client, "facture", cid, [{"designation": "Rendu", "quantity": 1, "unit_price": 100, "vat_rate": 20}], action="valider")
+    new_doc(client, "facture", other, [{"designation": "Plan", "quantity": 1, "unit_price": 50, "vat_rate": 20}], action="valider")
+    html = client.get(f"/documents?periode=tout&client={cid}").get_data(as_text=True)
+    assert "Agence Dupont" in html and "Autre client" in html  # la liste déroulante contient les deux sociétés
+    assert html.count('data-href="') == 1
+    doc_id = conn.execute("SELECT id FROM documents WHERE client_id=? AND kind='facture'", (cid,)).fetchone()["id"]
+    # règlement avec référence de paiement
+    client.post(f"/documents/{doc_id}/paiement", data={"date": "2026-11-05", "amount": "120", "method": "virement",
+                                                       "reference": "VIR SEPA AGENCE DUPONT FACT"})
+    assert conn.execute("SELECT reference FROM payments WHERE document_id=?", (doc_id,)).fetchone()["reference"] == "VIR SEPA AGENCE DUPONT FACT"
+    assert client.get(f"/documents/{doc_id}").status_code == 200
+    # rapprochement d'un virement
+    d3 = conn.execute("SELECT * FROM documents WHERE client_id=? AND kind='facture'", (other,)).fetchone()
+    m = logic.match_transfer(conn, f"VIR SEPA AUTRE CLIENT FACTURE {d3['number']}", "60,00")
+    assert m["matches"] and m["matches"][0]["doc"]["id"] == d3["id"] and m["amount"] == 60.0
+    assert client.get("/?virement=VIR+AUTRE+CLIENT&montant=60").status_code == 200
+    # cotisations URSSAF payées en partie → retard
+    client.post("/urssaf/2026-T2/cotisations", data={"amount": "500"})
+    client.post("/urssaf/2026-T2/paiement", data={"date": "2026-07-25", "amount": "300", "reference": "PRLV URSSAF"})
+    a = logic.urssaf_arrears(conn, date(2026, 11, 19))
+    assert a["total"] == 200 and a["periods"][0]["period"] == "2026-T2"
+    r = new_doc(client, "facture", cid, [{"designation": "Brouillon", "quantity": 2, "unit_price": 10, "vat_rate": 20}])
+    draft_id = conn.execute("SELECT id FROM documents WHERE status='brouillon'").fetchone()["id"]
+    for url in ("/urssaf?p=2026-T2", "/", "/achats/nouveau", f"/documents/{doc_id}", f"/documents/{draft_id}/modifier",
+                f"/documents/{draft_id}", "/documents/nouveau?kind=devis", "/documents/nouveau?kind=facture",
+                f"/achats/{p['id']}"):
+        assert client.get(url).status_code == 200, url
+    assert "Retard URSSAF" in client.get("/").get_data(as_text=True)
+    conn.close()

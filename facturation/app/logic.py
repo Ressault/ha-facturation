@@ -5,6 +5,8 @@ from datetime import date, timedelta
 
 import db
 import superpdp
+from decimal import Decimal
+
 from calc import d, money, totals, vat_breakdown
 from pdf import build_pdf
 
@@ -509,9 +511,109 @@ def tasks(conn, today=None):
     return out
 
 
+# -- cotisations URSSAF : montant demandé, règlements, retard ---------------------
+
+def urssaf_bounds(period):
+    """(début, fin exclue, date limite) d'une période URSSAF 'YYYY-Tn' ou 'YYYY-MM'."""
+    from calc import month_bounds, quarter_bounds
+    start, end = quarter_bounds(period) if "-T" in period else month_bounds(period)
+    e = date.fromisoformat(end)
+    deadline = (date(e.year + (e.month == 12), e.month % 12 + 1, 1) - timedelta(days=1)).isoformat()
+    return start, end, deadline
+
+
+def urssaf_estimate(conn, period):
+    from calc import compute_urssaf
+    start, end, _ = urssaf_bounds(period)
+    return compute_urssaf(conn, start, end, db.get_settings(conn))
+
+
+def urssaf_set_due(conn, period, amount, declared_ca=None):
+    conn.execute("INSERT INTO urssaf_dues(period, amount, declared_ca) VALUES (?, ?, ?) ON CONFLICT(period) DO UPDATE "
+                 "SET amount = excluded.amount, declared_ca = COALESCE(excluded.declared_ca, urssaf_dues.declared_ca)",
+                 (period, float(money(amount)), declared_ca))
+
+
+def urssaf_add_payment(conn, period, pay_date, amount, reference=None):
+    amount = money(amount)
+    if amount <= 0:
+        raise BusinessError("Montant invalide.")
+    conn.execute("INSERT INTO urssaf_payments(period, date, amount, reference) VALUES (?, ?, ?, ?)",
+                 (period, pay_date, float(amount), (reference or "").strip() or None))
+
+
+def urssaf_ledger(conn, today=None):
+    """Une ligne par période déclarée : cotisations demandées, réglées, reste, retard."""
+    today = (today or date.today()).isoformat()
+    periods = {r["period"] for r in conn.execute("SELECT period FROM urssaf_dues").fetchall()}
+    periods |= {r["period"] for r in conn.execute("SELECT DISTINCT period FROM urssaf_payments").fetchall()}
+    out = []
+    for p in sorted(periods, reverse=True):
+        due = conn.execute("SELECT * FROM urssaf_dues WHERE period = ?", (p,)).fetchone()
+        paid = money(conn.execute("SELECT COALESCE(SUM(amount), 0) s FROM urssaf_payments WHERE period = ?",
+                                  (p,)).fetchone()["s"])
+        amount = money(due["amount"]) if due else Decimal("0")
+        _, _, deadline = urssaf_bounds(p)
+        rest = max(Decimal("0"), amount - paid)
+        out.append({"period": p, "due": float(amount), "paid": float(paid), "rest": float(rest),
+                    "deadline": deadline, "late": rest > 0 and deadline < today,
+                    "declared_ca": due["declared_ca"] if due else None})
+    return out
+
+
+def urssaf_arrears(conn, today=None):
+    rows = [r for r in urssaf_ledger(conn, today) if r["late"]]
+    return {"total": sum(r["rest"] for r in rows), "periods": rows}
+
+
+def match_transfer(conn, label, amount=None):
+    """Factures non soldées qui correspondent à un virement collé depuis la banque (libellé, montant)."""
+    label = (label or "").strip()
+    amount = money(amount) if amount not in (None, "") else None
+    if not amount:
+        m = re.findall(r"[+]?\s?(\d{1,3}(?:[ \u202f.]\d{3})*(?:,\d{2})|\d+\.\d{2})\s?(?:€|EUR)?", label)
+        if m:
+            amount = money(m[-1].replace(" ", "").replace("\u202f", "").replace(".", "").replace(",", ".")
+                           if "," in m[-1] else m[-1])
+    words = {w for w in re.findall(r"[A-Za-zÀ-ÿ0-9]{3,}", label.lower())}
+    nums = set(re.findall(r"\d+", label))
+    out = []
+    for r in conn.execute(
+            "SELECT d.*, cl.name AS client_name, (SELECT COALESCE(SUM(amount),0) FROM payments WHERE document_id=d.id) "
+            "AS paid FROM documents d LEFT JOIN clients cl ON cl.id = d.client_id WHERE d.kind = 'facture' "
+            "AND d.status IN ('emise', 'partielle')").fetchall():
+        rest = money(r["total_ttc"]) - money(r["paid"]) - credited_amount(conn, r["id"])
+        if rest <= 0:
+            continue
+        score, why = 0, []
+        num = str(r["number"] or "")
+        if num and (num in label or num.split("-")[-1].lstrip("0") in nums):
+            score += 5
+            why.append("n° de facture")
+        name_words = {w for w in re.findall(r"[A-Za-zÀ-ÿ0-9]{3,}", (r["client_name"] or "").lower())} - {"sarl", "sas", "eurl", "sasu"}
+        if name_words and name_words & words:
+            score += 3
+            why.append("client")
+        if amount and abs(rest - amount) < Decimal("0.01"):
+            score += 4
+            why.append("montant exact")
+        elif amount and abs(money(r["total_ttc"]) - amount) < Decimal("0.01"):
+            score += 3
+            why.append("montant de la facture")
+        if score:
+            out.append({"doc": dict(r), "rest": float(rest), "score": score, "why": why})
+    out.sort(key=lambda x: (-x["score"], x["doc"]["issue_date"] or ""))
+    return {"amount": float(amount) if amount else None, "matches": out[:6]}
+
+
 def mark_task(conn, task_id, done=True):
     if done:
         conn.execute("INSERT OR IGNORE INTO tasks_done(task) VALUES (?)", (task_id,))
+        if task_id.startswith("urssaf:"):
+            period = task_id[7:]
+            if not conn.execute("SELECT 1 FROM urssaf_dues WHERE period = ?", (period,)).fetchone():
+                r = urssaf_estimate(conn, period)
+                urssaf_set_due(conn, period, r["total"], float(sum(r["ca"][k] for k in ("vente", "bic", "bnc"))))
         if task_id.startswith("tva:"):
             from calc import compute_period
             period = task_id[4:]
@@ -545,15 +647,15 @@ def refresh_status(conn, doc_id):
     conn.execute("UPDATE documents SET status = ? WHERE id = ?", (status, doc_id))
 
 
-def add_payment(conn, doc_id, pay_date, amount, method):
+def add_payment(conn, doc_id, pay_date, amount, method, reference=None):
     doc, lines = get_doc(conn, doc_id)
     if doc["kind"] not in ("facture", "avoir") or doc["status"] == "brouillon":
         raise BusinessError("Émettez d'abord le document.")
     amount = money(amount)
     if amount <= 0:
         raise BusinessError("Montant invalide.")
-    pid = conn.execute("INSERT INTO payments(document_id, date, amount, method) VALUES (?, ?, ?, ?)",
-                       (doc_id, pay_date, float(amount), method)).lastrowid
+    pid = conn.execute("INSERT INTO payments(document_id, date, amount, method, reference) VALUES (?, ?, ?, ?, ?)",
+                       (doc_id, pay_date, float(amount), method, (reference or "").strip() or None)).lastrowid
     refresh_status(conn, doc_id)
     return pid
 
