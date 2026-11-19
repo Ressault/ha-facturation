@@ -1,5 +1,5 @@
-ARG BUILD_FROM=python:3.12-alpine
-FROM ${BUILD_FROM}
+
+FROM docker.io/library/python:3.12-alpine
 
 RUN apk add --no-cache tzdata
 COPY requirements.txt /tmp/requirements.txt
