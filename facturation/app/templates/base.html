@@ -8,7 +8,7 @@
 <meta name="color-scheme" content="light">
 <style>html{background:#eceff3}html[data-theme=dark]{background:#0b1720}</style>
 <title>{% block title %}Facturation{% endblock %}</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=60">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=61">
 </head>
 <body>
 <header class="top"><div class="inner">
@@ -120,7 +120,7 @@ function combo(input, items, onPick, opts = {}) {
     else if (e.key === 'Escape') box.hidden = true;
   });
   box.addEventListener('mousedown', e => { const o = e.target.closest('.opt'); if (o) { e.preventDefault(); pick(+o.dataset.i); } });
-  input.addEventListener('blur', () => setTimeout(() => box.hidden = true, 120));
+  input.addEventListener('blur', () => { box.hidden = true; });
   window.addEventListener('scroll', () => { if (!box.hidden) place(); }, {passive: true});
   return box;
 }
@@ -144,7 +144,7 @@ document.querySelectorAll('form.task-check').forEach(f => f.addEventListener('su
   e.preventDefault();
   const btn = f.querySelector('.check'); btn.classList.add('done');
   await fetch(f.action, {method: 'POST', headers: {'X-Requested-With': 'fetch'}, body: new FormData(f)});
-  const t = f.closest('.task'); t.classList.add('hide'); setTimeout(() => t.remove(), 300);
+  const t = f.closest('.task'); t.classList.add('hide'); setTimeout(() => t.remove(), 150);
 }));
 // thème clair (par défaut) / sombre
 const themeBtn = document.getElementById('theme');
