@@ -54,7 +54,7 @@
     {% if p and p.source != 'pdp' %}<button form="delform" class="danger left">Supprimer</button>{% endif %}
     <a class="btn" href="{{ url_for('purchases') }}">Annuler</a>
     <button class="primary" name="next" value="">{{ 'Enregistrer' if p else 'Ajouter' }}</button>
-    {% if not p %}<button class="primary" name="next" value="new">＋ Ajouter &amp; nouvel achat</button>{% endif %}
+    {% if not p %}<button name="next" value="new">Ajouter &amp; nouvel achat</button>{% endif %}
   </div>
 </form>
 {% if p and p.source != 'pdp' %}
