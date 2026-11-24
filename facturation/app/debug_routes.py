@@ -36,11 +36,14 @@ def register(app, conn):
     @app.route("/api/debug/pdfcheck")
     def api_debug_pdfcheck():
         """Analyse tous les PDF archivés et compare aux montants enregistrés."""
+        from flask import request
         import pdfimport
         c = conn()
         try:
+            start, count = int(request.args.get("start") or 0), int(request.args.get("count") or 60)
             rows = c.execute("SELECT id, number, total_ht, total_ttc, issue_date, pdf_path FROM documents "
-                             "WHERE pdf_path IS NOT NULL AND imported=1 ORDER BY id").fetchall()
+                             "WHERE pdf_path IS NOT NULL AND imported=1 ORDER BY id LIMIT ? OFFSET ?",
+                             (count, start)).fetchall()
             bad, ok, warn = [], 0, 0
             for r in rows:
                 try:
