@@ -11,6 +11,26 @@ import superpdp
 
 
 def register(app, conn):
+    @app.route("/api/debug/pdftext/<int:doc_id>")
+    def api_debug_pdftext(doc_id):
+        """Texte extrait d'un PDF archivé (sert à régler l'import des devis PDF)."""
+        from flask import jsonify, request
+        import pdfimport
+        c = conn()
+        try:
+            row = c.execute("SELECT pdf_path, number, total_ht, total_ttc, issue_date FROM documents WHERE id=?",
+                            (doc_id,)).fetchone()
+            if not row or not row["pdf_path"]:
+                return jsonify({"error": "pas de PDF"}), 404
+            with open(row["pdf_path"], "rb") as fh:
+                data = fh.read()
+            out = {"doc": dict(row), "text": pdfimport.pdf_text(data, request.args.get("mode") or "layout")}
+            if request.args.get("parse"):
+                out["parsed"] = pdfimport.parse_quote(data)
+            return jsonify(out)
+        finally:
+            c.close()
+
     @app.route("/api/debug/annuaire/<siren>")
     def api_debug_directory(siren):
         c = conn()

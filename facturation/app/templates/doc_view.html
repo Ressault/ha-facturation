@@ -24,7 +24,8 @@
       <a href="{{ url_for('doc_pdf', doc_id=doc.id) }}" target="_blank">Aperçu PDF</a>
       <a href="{{ url_for('doc_pdf', doc_id=doc.id, dl=1) }}">Télécharger le PDF</a>
       {% if doc.kind == 'devis' or doc.status == 'brouillon' %}<a href="{{ url_for('doc_edit', doc_id=doc.id) }}">Modifier</a>{% endif %}
-      <form method="post" action="{{ url_for('doc_duplicate', doc_id=doc.id) }}"><button>Dupliquer</button></form>
+      <form method="post" action="{{ url_for('doc_duplicate', doc_id=doc.id) }}"><button name="en" value="facture">Dupliquer en facture</button></form>
+      <form method="post" action="{{ url_for('doc_duplicate', doc_id=doc.id) }}"><button name="en" value="devis">Dupliquer en devis</button></form>
       {% if client_email and doc.status != 'brouillon' %}<a href="{{ mail_link }}">{{ 'Relancer le client par e-mail' if late else 'Envoyer par e-mail' }}</a>{% endif %}
       {% if doc.kind == 'devis' %}
         <hr>{% for s in ['en_attente', 'accepte', 'refuse'] %}

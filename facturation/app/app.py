@@ -535,7 +535,8 @@ def query_documents(c, kind, f):
         args += [f"%{f['q']}%"] * 3
     sql += " ORDER BY (d.status='brouillon') DESC, COALESCE(d.issue_date,'') DESC, d.id DESC"
     rows = [dict(r) for r in c.execute(sql, args).fetchall()]
-    tot = {"n": 0, "ht": d(0), "ttc": d(0), "rest": d(0), "enc": d(0)}
+    tot = {"n": 0, "ht": d(0), "ttc": d(0), "rest": d(0), "enc": d(0), "rest_ht": d(0), "drafts_ht": d(0),
+           "drafts_ttc": d(0), "n_drafts": 0, "enc_ht": d(0)}
     for r in rows:
         sign = -1 if r["kind"] == "avoir" else 1
         r["sign"] = sign
@@ -543,15 +544,25 @@ def query_documents(c, kind, f):
                          and r["due_date"] < today)
         r["rest"] = float(money(r["total_ttc"]) - money(r["paid"]) - money(r["credited"])) \
             if r["kind"] == "facture" and r["status"] in ("emise", "partielle") else 0.0
+        ratio = d(r["total_ht"]) / d(r["total_ttc"]) if r["total_ttc"] else d(1)
         if r["status"] == "brouillon":
+            if r["kind"] == "facture":
+                tot["n_drafts"] += 1
+                tot["drafts_ht"] += d(r["total_ht"])
+                tot["drafts_ttc"] += d(r["total_ttc"])
             continue
         tot["n"] += 1
         tot["ht"] += sign * d(r["total_ht"])
         tot["ttc"] += sign * d(r["total_ttc"])
         tot["rest"] += d(r["rest"])
+        tot["rest_ht"] += money(d(r["rest"]) * ratio)
+    tot["rest_drafts"] = tot["rest"] + tot["drafts_ttc"]
+    tot["rest_drafts_ht"] = tot["rest_ht"] + tot["drafts_ht"]
     if f["type"] == "encaisse_le" and f["periode"] != "tout" and kind == "facture":
-        tot["enc"] = sum((d(-r["amount"] if r["kind"] == "avoir" else r["amount"])
-                          for r in calc.cash_rows(c, start, end)), d(0))
+        for r in calc.cash_rows(c, start, end):
+            sg = -1 if r["kind"] == "avoir" else 1
+            tot["enc"] += sg * d(r["amount"])
+            tot["enc_ht"] += sg * money(d(r["amount"]) * (d(r["total_ht"]) / d(r["total_ttc"]) if r["total_ttc"] else 1))
     return rows, tot
 
 
@@ -739,7 +750,7 @@ def doc_view(doc_id):
         doc, lines = logic.get_doc(c, doc_id)
         client = db.loads(doc["client_snapshot"]) or dict(
             c.execute("SELECT * FROM clients WHERE id=?", (doc["client_id"],)).fetchone() or {})
-        t = calc.totals(lines)
+        t = calc.totals(lines, doc["issue_date"])
         payments = c.execute("SELECT * FROM payments WHERE document_id=? ORDER BY date", (doc_id,)).fetchall()
         paid = logic.paid_amount(c, doc_id)
         credited = logic.credited_amount(c, doc_id) if doc["kind"] == "facture" else 0
@@ -861,7 +872,8 @@ def doc_to_avoir(doc_id):
 def doc_duplicate(doc_id):
     with db.transaction() as c:
         doc, _ = logic.get_doc(c, doc_id)
-        kind = "devis" if doc["kind"] == "devis" else "facture"
+        target = request.form.get("en")
+        kind = target if target in ("facture", "devis") else ("devis" if doc["kind"] == "devis" else "facture")
         new_id = logic.duplicate_as(c, doc_id, kind)
         s = db.get_settings(c)
         terms = doc.get("payment_terms") or s.get("default_payment_terms") or "30-inv"
@@ -870,7 +882,7 @@ def doc_duplicate(doc_id):
         if kind == "devis":
             n = logic.next_number(c, "devis", date.today().isoformat())
             c.execute("UPDATE documents SET number=?, status='en_attente', source_devis_id=NULL WHERE id=?", (n, new_id))
-    flash("Copie créée en brouillon." if kind == "facture" else "Devis dupliqué.", "ok")
+    flash("Copie créée en facture brouillon." if kind == "facture" else "Copie créée en devis.", "ok")
     return redirect(url_for("doc_edit", doc_id=new_id))
 
 

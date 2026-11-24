@@ -94,31 +94,46 @@ def line_net(line) -> Decimal:
     return money(d(line["quantity"]) * d(line["unit_price"]))
 
 
-def vat_breakdown(lines):
-    """[(taux, base_ht, tva)] — TVA calculée par taux sur la base cumulée (règle EN 16931)."""
-    bases = OrderedDict()
+VAT_SUM_ROUND_FROM = "2026-03-30"  # arrondi de la somme à partir de cette date (réforme de la facturation électronique)
+
+
+def vat_method(issue_date=None):
+    """'somme' : TVA calculée sur la base cumulée de chaque taux puis arrondie une fois (méthode préconisée) ;
+    'lignes' : TVA arrondie ligne par ligne puis additionnée (méthode de MonAE avant le 30/03/2026)."""
+    if issue_date and str(issue_date)[:10] < VAT_SUM_ROUND_FROM:
+        return "lignes"
+    return "somme"
+
+
+def vat_breakdown(lines, issue_date=None):
+    """[(taux, base_ht, tva)] par taux de TVA, selon la méthode d'arrondi applicable à la date du document."""
+    method = vat_method(issue_date)
+    bases, taxes = OrderedDict(), OrderedDict()
     for ln in items(lines):
         k = rate_key(ln["vat_rate"])
-        bases[k] = bases.get(k, Decimal("0")) + line_net(ln)
+        net = line_net(ln)
+        bases[k] = bases.get(k, Decimal("0")) + net
+        taxes[k] = taxes.get(k, Decimal("0")) + money(net * k / 100)
     out = []
     for rate, base in bases.items():
-        out.append((rate, money(base), money(base * rate / 100)))
+        tva = taxes[rate] if method == "lignes" else money(base * rate / 100)
+        out.append((rate, money(base), money(tva)))
     return out
 
 
-def totals(lines):
-    bd = vat_breakdown(lines)
+def totals(lines, issue_date=None):
+    bd = vat_breakdown(lines, issue_date)
     ht = sum((b for _, b, _ in bd), Decimal("0"))
     tva = sum((t for _, _, t in bd), Decimal("0"))
     return {"ht": money(ht), "tva": money(tva), "ttc": money(ht + tva), "breakdown": bd}
 
 
-def nature_breakdown(lines, default_nature="bnc"):
+def nature_breakdown(lines, default_nature="bnc", issue_date=None):
     """[(nature, taux, base_ht, tva)] : ventilation par nature d'activité et par taux.
 
     La TVA de chaque taux (calculée globalement) est répartie au prorata des bases.
     """
-    per_rate = {r: (b, t) for r, b, t in vat_breakdown(lines)}
+    per_rate = {r: (b, t) for r, b, t in vat_breakdown(lines, issue_date)}
     groups = OrderedDict()
     for ln in items(lines):
         key = (_get(ln, "nature") or default_nature, rate_key(ln["vat_rate"]))

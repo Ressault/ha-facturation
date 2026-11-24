@@ -171,7 +171,7 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
     """doc : dict du document ; seller/client : instantanés ; renvoie le chemin."""
     extra = extra or {}
     kind = doc["kind"]
-    t = totals(lines)
+    t = totals(lines, doc.get("issue_date"))
     pdf = DocPDF(legal_footer(seller))
     pdf.alias_nb_pages()
     pdf.add_page()

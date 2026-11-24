@@ -181,7 +181,7 @@ def check_lines(lines, inv):
     from calc import totals
     if not any(ln["kind"] == "item" for ln in lines):
         return False
-    t = totals(lines)
+    t = totals(lines, inv.get("invoiced_on") or inv.get("quote_date"))
     ht = abs(money(inv.get("total")))
     ttc = abs(money(inv.get("total_with_vat"))) if inv.get("total_with_vat") is not None else None
     return abs(t["ht"] - ht) <= d("0.02") and (ttc is None or abs(t["ttc"] - ttc) <= d("0.02"))
@@ -242,7 +242,7 @@ def import_invoice(conn, api, inv, client_map, with_pdfs, report, kind_hint=None
     if not check_lines(lines, inv):
         report["approx"] += 1
         lines = fallback_lines(inv)
-    t = totals(lines)
+    t = totals(lines, inv.get("invoiced_on") or inv.get("quote_date"))
     terms = map_terms(inv.get("pay_before"))
     extra_cols = {"payment_terms": terms, "penalty_rate": _num_or_none(inv.get("penalty")),
                   "discount_rate": _num_or_none(inv.get("discount")), "monae_id": inv.get("id")}

@@ -44,12 +44,17 @@
 </form>
 
 <div class="card tight">
+  {% macro both(ht, ttc, style='') %}<b {{ style|safe }}><span data-ht="{{ ht|money }}" data-ttc="{{ ttc|money }}">{{ ht|money }}</span></b>{% endmacro %}
   <div class="summary">
     <div>{{ 'Devis' if is_devis else 'Documents' }}<b>{{ tot.n }}</b></div>
-    <div>Total HT<b>{{ tot.ht|money }}</b></div>
-    <div>Total TTC<b>{{ tot.ttc|money }}</b></div>
-    {% if not is_devis %}<div>Reste à encaisser<b style="color:var(--amber)">{{ tot.rest|money }}</b></div>{% endif %}
-    {% if tot.enc %}<div>Encaissé sur la période<b style="color:var(--accent)">{{ tot.enc|money }}</b></div>{% endif %}
+    <div>{{ 'Total' if is_devis else 'Total facturé' }}{{ both(tot.ht, tot.ttc) }}</div>
+    {% if not is_devis %}
+    <div>Reste à encaisser{{ both(tot.rest_ht, tot.rest, 'style="color:var(--orange)"') }}</div>
+    <div>Reste à encaisser avec brouillons{{ both(tot.rest_drafts_ht, tot.rest_drafts, 'style="color:var(--orange)"') }}</div>
+    {% endif %}
+    {% if tot.enc %}<div>Encaissé sur la période{{ both(tot.enc_ht, tot.enc) }}</div>{% endif %}
+    <span class="spacer" style="flex:1"></span>
+    <div class="seg" data-mode style="align-self:center"><button type="button" data-m="ht">HT</button><button type="button" data-m="ttc">TTC</button></div>
   </div>
   {% if docs %}
   {% if not is_devis %}<div class="legend-rows"><span><i style="background:var(--green)"></i>Brouillon</span><span><i style="background:var(--orange)"></i>En retard</span></div>{% endif %}

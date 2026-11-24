@@ -171,8 +171,8 @@ def save_document(conn, doc_id, form, lines):
         raise BusinessError("Ajoutez au moins une ligne de prestation.")
     if not form.get("client_id"):
         raise BusinessError("Choisissez un client.")
-    t = totals(clean)
     issue = form.get("issue_date") or date.today().isoformat()
+    t = totals(clean, issue)
     terms = form.get("payment_terms") or s.get("default_payment_terms") or "30-inv"
     values = {
         "kind": kind, "client_id": int(form["client_id"]), "issue_date": issue,
@@ -300,12 +300,14 @@ def duplicate_as(conn, src_id, kind, avoir=False):
     if avoir:
         vals["avoir_of_id"] = src_id
         vals["subject"] = f"Avoir sur facture {src['number']}"
-    if src["kind"] == "devis":
+    if src["kind"] == "devis" and kind == "facture":
         vals["source_devis_id"] = src_id
-    if src["kind"] == "devis":  # les lignes en option ne passent pas sur la facture
+        # les lignes en option ne passent pas sur la facture
         lines = [dict(ln, position=i) for i, ln in enumerate(x for x in lines if not x.get("optional"))]
-        t = totals(lines)
-        vals.update(total_ht=float(t["ht"]), total_tva=float(t["tva"]), total_ttc=float(t["ttc"]))
+    if kind != "devis":
+        lines = [dict(ln, optional=0) for ln in lines]
+    t = totals(lines, today)  # recalcul à la date du nouveau document (méthode d'arrondi en vigueur)
+    vals.update(total_ht=float(t["ht"]), total_tva=float(t["tva"]), total_ttc=float(t["ttc"]))
     cols = ", ".join(vals)
     new_id = conn.execute(f"INSERT INTO documents ({cols}) VALUES ({', '.join('?' for _ in vals)})",
                           tuple(vals.values())).lastrowid
