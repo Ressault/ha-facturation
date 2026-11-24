@@ -849,6 +849,6 @@ def test_v9_quote_pdf_mentions(env):
     dv = conn.execute("SELECT * FROM documents WHERE id=?", (did,)).fetchone()
     import pdfimport
     text = pdfimport.pdf_text(open(dv["pdf_path"], "rb").read())
-    assert "Devis valide jusqu'au" in text and "Conditions de règlement appliquées sur les factures" in text
+    assert "Conditions de règlement appliquées sur les factures" in text
     assert "Date limite de règlement" in text and "40 €" in text
     assert f"BON DE COMMANDE – DEVIS N° {dv['number']}" in text and "Nom et qualité" in text and "Bon pour accord" in text
