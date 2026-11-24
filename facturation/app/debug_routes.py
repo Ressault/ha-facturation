@@ -13,8 +13,8 @@ import superpdp
 def register(app, conn):
     @app.route("/api/debug/pdftext/<int:doc_id>")
     def api_debug_pdftext(doc_id):
-        """Texte extrait d'un PDF archivé (sert à régler l'import des devis PDF)."""
-        from flask import jsonify, request
+        """Texte extrait d'un PDF archivé, analyse, et lignes enregistrées (réglage de l'import PDF)."""
+        from flask import request
         import pdfimport
         c = conn()
         try:
@@ -24,10 +24,52 @@ def register(app, conn):
                 return jsonify({"error": "pas de PDF"}), 404
             with open(row["pdf_path"], "rb") as fh:
                 data = fh.read()
-            out = {"doc": dict(row), "text": pdfimport.pdf_text(data, request.args.get("mode") or "layout")}
-            if request.args.get("parse"):
-                out["parsed"] = pdfimport.parse_quote(data)
-            return jsonify(out)
+            text = pdfimport.pdf_text(data, request.args.get("mode") or "plain")
+            stored = [dict(r) for r in c.execute(
+                "SELECT kind, designation, description, quantity, unit, unit_price, vat_rate FROM lines "
+                "WHERE document_id=? ORDER BY position", (doc_id,))]
+            return jsonify({"doc": dict(row), "text": text, "stored": stored,
+                            "parsed": pdfimport.jsonable(pdfimport.parse_text(text))})
+        finally:
+            c.close()
+
+    @app.route("/api/debug/pdfcheck")
+    def api_debug_pdfcheck():
+        """Analyse tous les PDF archivés et compare aux montants enregistrés."""
+        import pdfimport
+        c = conn()
+        try:
+            rows = c.execute("SELECT id, number, total_ht, total_ttc, issue_date, pdf_path FROM documents "
+                             "WHERE pdf_path IS NOT NULL AND imported=1 ORDER BY id").fetchall()
+            bad, ok, warn = [], 0, 0
+            for r in rows:
+                try:
+                    with open(r["pdf_path"], "rb") as fh:
+                        p = pdfimport.parse_quote(fh.read())
+                except Exception as exc:  # noqa: BLE001
+                    bad.append({"id": r["id"], "err": str(exc)[:120]})
+                    continue
+                n_items = c.execute("SELECT COUNT(*) FROM lines WHERE document_id=? AND COALESCE(kind,'item')='item'",
+                                    (r["id"],)).fetchone()[0]
+                pi = sum(1 for ln in p["lines"] if ln["kind"] == "item")
+                probs = []
+                if p["number"] != r["number"]:
+                    probs.append(f"num {p['number']}")
+                if p["issue_date"] != r["issue_date"]:
+                    probs.append(f"date {p['issue_date']}")
+                if p["total_ht"] is None or abs(float(p["total_ht"]) - r["total_ht"]) > 0.01:
+                    probs.append(f"ht {p['total_ht']}")
+                if p["total_ttc"] is None or abs(float(p["total_ttc"]) - r["total_ttc"]) > 0.01:
+                    probs.append(f"ttc {p['total_ttc']}")
+                if pi != n_items:
+                    probs.append(f"items {pi}/{n_items}")
+                if p["warnings"]:
+                    warn += 1
+                if probs or p["warnings"]:
+                    bad.append({"id": r["id"], "n": r["number"], "p": probs, "w": p["warnings"][:2]})
+                else:
+                    ok += 1
+            return jsonify({"total": len(rows), "ok": ok, "with_warnings": warn, "bad": bad})
         finally:
             c.close()
 
