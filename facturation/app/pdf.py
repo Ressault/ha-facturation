@@ -52,6 +52,28 @@ def penalty_text(doc, seller):
     return seller.get("late_penalty") or "Pénalités de retard : 3 fois le taux d'intérêt légal."
 
 
+MOIS_LONG = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre",
+             "novembre", "décembre"]
+
+
+def long_date(iso):
+    try:
+        y, m, dd = str(iso)[:10].split("-")
+        return f"{int(dd)}{'er' if dd == '01' else ''} {MOIS_LONG[int(m) - 1]} {y}"
+    except (ValueError, IndexError):
+        return str(iso or "")
+
+
+def terms_sentence(code):
+    """« 60 jours nets, à compter de la date d'émission de la facture » (comme sur les devis MonAE)."""
+    code = code or "30-inv"
+    if code == "0":
+        return "à réception de la facture"
+    label = TERMS_LABEL.get(code, code)
+    label = label.replace("jours net", "jours nets") if "fin de mois" not in label else label
+    return f"{label}, à compter de la date d'émission de la facture"
+
+
 def discount_text(doc, seller):
     rate = doc.get("discount_rate")
     if rate in (None, ""):
@@ -165,6 +187,47 @@ def payment_box(pdf, doc, seller, t, extra):
         pdf.set_font("dejavu", "B", 10.5 if label == "IBAN" else 9)
         pdf.cell(w - pad * 2 - label_w, line_h, val, new_x="LMARGIN", new_y="NEXT")
     pdf.set_y(y + h + 4)
+
+
+def devis_terms(pdf, doc, seller, client):
+    """Fin du devis : validité, conditions de règlement des futures factures, bon de commande à signer."""
+    def line(text, bold=False, size=8.6, color=None, h=4.6):
+        pdf.set_font("dejavu", "B" if bold else "", size)
+        pdf.set_text_color(*(color or INK))
+        pdf.multi_cell(0, h, text, align="L", new_x="LMARGIN", new_y="NEXT")
+
+    if pdf.get_y() > 200:
+        pdf.add_page()
+    if doc.get("validity_date"):
+        line(f"Devis valide jusqu'au : {long_date(doc['validity_date'])}")
+        pdf.ln(3)
+    line("Conditions de règlement appliquées sur les factures", bold=True, size=8.8)
+    line(f"Date limite de règlement : {terms_sentence(doc.get('payment_terms') or seller.get('default_payment_terms'))}")
+    line(penalty_text(doc, seller))
+    if client.get("kind", "pro") == "pro" and seller.get("recovery_fee"):
+        line(seller["recovery_fee"])
+    line(discount_text(doc, seller))
+
+    # bon de commande
+    pdf.ln(4)
+    if pdf.get_y() > 232:
+        pdf.add_page()
+    pdf.set_draw_color(*HAIR)
+    pdf.set_line_width(0.2)
+    pdf.line(16, pdf.get_y(), 194, pdf.get_y())
+    pdf.ln(3)
+    line(f"BON DE COMMANDE – DEVIS N° {doc.get('number') or ''}", bold=True, size=9.2, h=5.5)
+    pdf.set_font("dejavu", "", 8.6)
+    pdf.set_text_color(*INK)
+    pdf.cell(89, 6, "Société :")
+    pdf.cell(89, 6, "Nom et qualité :", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(89, 6, "Date :", new_x="LMARGIN", new_y="NEXT")
+    line("Signature et cachet de la société, précédés de la mention « Bon pour accord »", h=6)
+    pdf.ln(1)
+    y = pdf.get_y()
+    pdf.set_draw_color(*HAIR)
+    pdf.rect(16, y, 82, 26, round_corners=True, corner_radius=2.5)
+    pdf.set_y(y + 28)
 
 
 def build_pdf(doc, lines, seller, client, path, extra=None):
@@ -453,15 +516,7 @@ def build_pdf(doc, lines, seller, client, path, extra=None):
         pdf.ln(0.6)
 
     if kind == "devis":
-        pdf.ln(6)
-        if pdf.get_y() > 228:
-            pdf.add_page()
-        pdf.set_font("dejavu", "B", 8.5)
-        pdf.set_text_color(*INK)
-        pdf.set_x(112)
-        pdf.cell(82, 6, "Bon pour accord — date et signature", new_x="LMARGIN", new_y="NEXT")
-        pdf.set_draw_color(*HAIR)
-        pdf.rect(112, pdf.get_y(), 82, 28, round_corners=True, corner_radius=2.5)
+        devis_terms(pdf, doc, seller, client)
 
     pdf.set_title(f"{TITLES[kind]} {doc.get('number') or ''}")
     pdf.set_author(seller.get("company_name", ""))
