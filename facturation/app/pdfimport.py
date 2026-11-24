@@ -4,6 +4,9 @@ Le texte est extrait avec pypdf, puis analysé : numéro, date, client, objet, l
 Le résultat est toujours présenté pour vérification avant d'être enregistré.
 """
 import io
+import os
+import secrets
+import shutil
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -14,7 +17,7 @@ MONTHS = {"janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4, "mai
 
 AMOUNT = r"-?\d{1,3}(?:[   ]?\d{3})*(?:,\d{1,4})?"
 ITEM_RE = re.compile(
-    rf"^(?P<label>.*?)\s+(?:(?P<rate>\d{{1,2}}(?:[.,]\d+)?)\s*%\s+)?(?P<pu>{AMOUNT})\s*€\s+"
+    rf"^(?:(?P<label>.*?)\s+)?(?:(?P<rate>\d{{1,2}}(?:[.,]\d+)?)\s*%\s+)?(?P<pu>{AMOUNT})\s*€\s+"
     rf"(?P<qty>-?\d+(?:[.,]\d+)?)(?:\s*(?P<unit>[A-Za-zéèû²³.]{{1,6}}))?\s+(?P<total>{AMOUNT})\s*€\s*$")
 FOOTER_RE = re.compile(r"^(Page \d+/\d+|.*SIRET \d{9}.*N° TVA.*|Site web :.*|.*–\s*Entreprise individuelle.*)$")
 
@@ -95,15 +98,18 @@ def parse_text(text):
             continue
         if not in_table:
             continue
-        tm = re.match(rf"^(Total HT|Sous-total HT|TOTAL HT)\s+({AMOUNT})\s*€", ln)
-        if tm or re.match(r"^(Report|À reporter|A reporter)\b", ln):
+        if re.match(r"^((sous-)?total\s*\(?HT\)?|Report|À reporter|A reporter)\b", ln, re.I):
             in_table = False
-            if tm:
-                out["total_ht"] = amount(tm.group(2))
             continue
         im = ITEM_RE.match(ln)
         if im:
-            label = im.group("label").strip().rstrip(":").strip()
+            label = (im.group("label") or "").strip()
+            if not label:  # désignation sur plusieurs lignes : on reprend les lignes en attente
+                pending = []
+                while lines and lines[-1]["kind"] == "title":
+                    pending.insert(0, lines.pop()["designation"])
+                label = " ".join(pending)
+            label = label.rstrip(":").strip()
             lines.append({"kind": "item", "designation": label, "description": "",
                           "quantity": amount(im.group("qty")), "unit": im.group("unit") or "",
                           "unit_price": amount(im.group("pu")),
@@ -115,16 +121,25 @@ def parse_text(text):
             prev["description"] = (prev["description"] + "\n" + ln).strip()
         else:
             lines.append({"kind": "title", "designation": ln})
+    # Remise globale (« Remise (10,00%) -22,00 € ») : ajoutée comme ligne négative.
+    rate0 = next((ln["vat_rate"] for ln in lines if ln["kind"] == "item"), Decimal("0"))
+    for m in re.finditer(rf"^Remise(?:\s*\(([\d.,]+)\s*%\))?\s+({AMOUNT})\s*€", full, re.M):
+        val = amount(m.group(2))
+        if val:
+            val = -abs(val)
+            lab = f"Remise {m.group(1).replace(',00', '')} %" if m.group(1) else "Remise"
+            lines.append({"kind": "item", "designation": lab, "description": "", "quantity": Decimal("1"),
+                          "unit": "", "unit_price": val, "vat_rate": rate0, "_total": val})
     out["lines"] = lines
+    hts = re.findall(rf"^Total HT\s+({AMOUNT})\s*€", full, re.M)
+    if hts:
+        out["total_ht"] = amount(hts[-1])
 
     for m in re.finditer(rf"^TVA\s+(\d{{1,2}}(?:[.,]\d+)?)\s*%\s+({AMOUNT})\s*€", full, re.M):
         out["total_tva"] = (out["total_tva"] or Decimal("0")) + amount(m.group(2))
     m = re.search(rf"^(?:TOTAL TTC|Total TTC|Net à payer)\s+({AMOUNT})\s*€", full, re.M)
     if m:
         out["total_ttc"] = amount(m.group(1))
-    if out["total_ht"] is None:
-        m = re.search(rf"^Total HT\s+({AMOUNT})\s*€", full, re.M)
-        out["total_ht"] = amount(m.group(1)) if m else None
     if out["total_tva"] is None and out["total_ht"] is not None:
         out["total_tva"] = Decimal("0")
     if out["total_ttc"] is None and out["total_ht"] is not None:
@@ -169,3 +184,119 @@ def jsonable(out):
             return [conv(x) for x in v]
         return v
     return conv(out)
+
+
+# -- importation -----------------------------------------------------------------
+
+def _norm(s):
+    s = re.sub(r"\b(sarl|sas|sasu|eurl|sa|sci|eirl|ei|ste|société)\b", " ", (s or "").lower())
+    return re.sub(r"[^a-z0-9]+", "", s.translate(str.maketrans("àâäéèêëîïôöùûüç", "aaaeeeeiioouuuc")))
+
+
+def match_client(conn, client):
+    """Retrouve un client existant par SIREN/SIRET, puis par nom."""
+    siren = (client.get("siren") or "")[:9]
+    if len(siren) == 9:
+        row = conn.execute("SELECT id FROM clients WHERE REPLACE(COALESCE(siren,''),' ','') LIKE ?",
+                           (siren + "%",)).fetchone()
+        if row:
+            return row["id"]
+    key = _norm(client.get("name"))
+    if not key:
+        return None
+    for row in conn.execute("SELECT id, name FROM clients"):
+        if _norm(row["name"]) == key:
+            return row["id"]
+    return None
+
+
+def stage_dir():
+    import db
+    path = os.path.join(db.DATA_DIR, "tmp", "import-pdf")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def stage(conn, files):
+    """Analyse des PDF envoyés : renvoie la liste à vérifier (fichiers gardés en attente)."""
+    out = []
+    for f in files:
+        data = f.read()
+        if not data:
+            continue
+        token = secrets.token_hex(8)
+        with open(os.path.join(stage_dir(), token + ".pdf"), "wb") as fh:
+            fh.write(data)
+        try:
+            p = parse_quote(data)
+        except Exception as exc:  # noqa: BLE001
+            p = {"kind": "devis", "number": "", "issue_date": None, "validity_date": None, "subject": "",
+                 "client": {"name": ""}, "lines": [], "total_ht": None, "total_tva": None, "total_ttc": None,
+                 "warnings": [f"PDF illisible : {exc}"]}
+        p["token"], p["filename"] = token, f.filename or "document.pdf"
+        p["client_id"] = match_client(conn, p["client"])
+        p["duplicate"] = bool(p["number"] and conn.execute(
+            "SELECT 1 FROM documents WHERE number=?", (p["number"],)).fetchone())
+        if p["duplicate"]:
+            p["warnings"].append(f"Le numéro {p['number']} existe déjà : il sera ignoré sauf si vous le changez.")
+        for ln in p["lines"]:
+            ln.pop("_total", None)
+        out.append(jsonable(p))
+    return out
+
+
+def save(conn, docs):
+    """Crée les devis vérifiés. Renvoie (créés, erreurs)."""
+    import db
+    import logic
+    from calc import totals
+    created, errors = [], []
+    s = db.get_settings(conn)
+    for p in docs:
+        if not p.get("include"):
+            continue
+        number = (p.get("number") or "").strip()
+        label = number or p.get("filename") or "?"
+        if not number:
+            errors.append(f"{label} : numéro manquant.")
+            continue
+        if conn.execute("SELECT 1 FROM documents WHERE number=?", (number,)).fetchone():
+            errors.append(f"{label} : ce numéro existe déjà.")
+            continue
+        issue = p.get("issue_date") or ""
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", issue):
+            errors.append(f"{label} : date invalide.")
+            continue
+        lines = logic.clean_lines(p.get("lines") or [], s.get("default_nature") or "bnc")
+        if not any(ln["kind"] == "item" for ln in lines):
+            errors.append(f"{label} : aucune ligne chiffrée.")
+            continue
+        cid = int(p["client_id"]) if str(p.get("client_id") or "").isdigit() else None
+        if not cid:
+            cl = p.get("client") or {}
+            name = (cl.get("name") or "").strip()
+            if not name:
+                errors.append(f"{label} : client manquant.")
+                continue
+            cid = match_client(conn, cl) or conn.execute(
+                "INSERT INTO clients(kind, name, siren, address, post_code, city, country) "
+                "VALUES ('pro', ?, ?, ?, ?, ?, 'FR')",
+                (name, (cl.get("siren") or "")[:14] or None, cl.get("address") or None,
+                 cl.get("post_code") or None, cl.get("city") or None)).lastrowid
+        t = totals(lines, issue)
+        status = p.get("status") if p.get("status") in ("en_attente", "accepte", "refuse") else "en_attente"
+        doc_id = conn.execute(
+            "INSERT INTO documents(kind, number, status, client_id, issue_date, validity_date, subject, "
+            "total_ht, total_tva, total_ttc, imported) VALUES ('devis', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            (number, status, cid, issue, p.get("validity_date") or None, (p.get("subject") or "").strip() or None,
+             float(t["ht"]), float(t["tva"]), float(t["ttc"]))).lastrowid
+        logic.insert_lines(conn, doc_id, lines)
+        src = os.path.join(stage_dir(), re.sub(r"[^0-9a-f]", "", p.get("token") or "") + ".pdf")
+        if p.get("token") and os.path.exists(src):
+            dest = logic.pdf_path_for({"kind": "devis", "number": number, "issue_date": issue, "id": doc_id})
+            shutil.move(src, dest)
+            conn.execute("UPDATE documents SET pdf_path=? WHERE id=?", (dest, doc_id))
+        created.append(doc_id)
+    if created:
+        db.log(conn, "info", f"{len(created)} devis importé(s) depuis des PDF.")
+    return created, errors

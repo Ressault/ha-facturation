@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.abspath(APP))
 def env(monkeypatch):
     tmp = tempfile.mkdtemp()
     monkeypatch.setenv("FACTU_DATA_DIR", tmp)
-    for m in ["db", "calc", "logic", "superpdp", "pdf", "importer", "monae", "backup", "app"]:
+    for m in ["db", "calc", "logic", "superpdp", "pdf", "importer", "monae", "backup", "pdfimport", "app"]:
         sys.modules.pop(m, None)
     import app as appmod
     import db
@@ -687,3 +687,97 @@ def test_v7_backup_restore(env):
     import pdf
     f = pdf.legal_footer({"company_name": "A", "siret": "1", "vat_number": "FR1"})
     assert f.split("\n")[1].startswith("TVA FR1")
+
+
+def test_v9_vat_rounding_duplicate_summary(env):
+    appmod, db, c = env
+    import calc
+    lines = [{"designation": "A", "quantity": 1, "unit_price": "0.13", "vat_rate": 20},
+             {"designation": "B", "quantity": 1, "unit_price": "0.13", "vat_rate": 20}]
+    # 0,026 + 0,026 : ligne par ligne 0,03 + 0,03 = 0,06 ; arrondi de la somme 0,052 -> 0,05
+    assert calc.totals(lines, "2026-03-29")["tva"] == Decimal("0.06")
+    assert calc.totals(lines, "2026-03-30")["tva"] == Decimal("0.05")
+    cid = make_client(c)
+    fid = new_doc(c, "facture", cid, [{"designation": "Perspective", "quantity": "1", "unit_price": "500",
+                                       "vat_rate": "20"}])
+    r = c.post(f"/documents/{fid}/dupliquer", data={"en": "devis"})
+    assert r.status_code == 302
+    conn = db.connect()
+    dv = conn.execute("SELECT * FROM documents WHERE kind='devis' ORDER BY id DESC").fetchone()
+    assert dv["number"].startswith("D-") and dv["status"] == "en_attente" and dv["total_ttc"] == 600
+    r = c.post(f"/documents/{dv['id']}/dupliquer", data={"en": "facture"})
+    f2 = conn.execute("SELECT * FROM documents WHERE kind='facture' ORDER BY id DESC").fetchone()
+    assert f2["id"] != fid and f2["status"] == "brouillon"
+    html = c.get("/documents?kind=facture").get_data(as_text=True)
+    assert "Reste à encaisser avec brouillons" in html and 'data-ttc=' in html
+
+
+def _monae_like_pdf():
+    from fpdf import FPDF
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.add_font("dejavu", "", os.path.join(APP, "fonts", "DejaVuSans.ttf"))
+    pdf.set_font("dejavu", size=10)
+    for t in ["SARL DRIPMOON", "13 Rue Descartes", "37000 TOURS", "Client – SIRET : 51418612100067",
+              "Objet : Deux perspectives", "Désignation % TVA PU HT Qté Total HT", "Projet Espacil",
+              "Perspective : 20.0 % 500,00 € 2 1 000,00 €", "- Mise en texture", "- Post-production",
+              "Total HT 1 000,00 €", "TVA 20.0 % 200,00 €", "TOTAL TTC 1 200,00 €",
+              "DEVIS N° D-2025-007", "Date : 4 octobre 2025"]:
+        pdf.cell(0, 6, t, new_x="LMARGIN", new_y="NEXT")
+    return bytes(pdf.output())
+
+
+def test_v9_pdf_quote_import(env):
+    appmod, db, c = env
+    import json
+    import pdfimport
+    p = pdfimport.parse_quote(_monae_like_pdf())
+    assert p["kind"] == "devis" and p["number"] == "D-2025-007" and p["issue_date"] == "2025-10-04"
+    assert p["client"]["name"] == "SARL DRIPMOON" and p["client"]["post_code"] == "37000"
+    items = [ln for ln in p["lines"] if ln["kind"] == "item"]
+    assert len(items) == 1 and items[0]["unit_price"] == Decimal("500.00") and items[0]["quantity"] == 2
+    assert "Mise en texture" in items[0]["description"] and not p["warnings"]
+    r = c.post("/devis/import", data={"files": (io.BytesIO(_monae_like_pdf()), "devis.pdf")},
+               content_type="multipart/form-data")
+    html = r.get_data(as_text=True)
+    assert r.status_code == 200 and "D-2025-007" in html
+    conn = db.connect()
+    assert not conn.execute("SELECT 1 FROM documents WHERE number='D-2025-007'").fetchone()  # rien avant validation
+    docs = json.loads(html.split("const DOCS = ")[1].split(";\n")[0])
+    for d in docs:
+        d.update(include=True, status="accepte")
+    r = c.post("/devis/import", data={"payload": json.dumps(docs)})
+    assert r.status_code == 302
+    dv = conn.execute("SELECT * FROM documents WHERE number='D-2025-007'").fetchone()
+    assert dv["kind"] == "devis" and dv["status"] == "accepte" and dv["total_ttc"] == 1200 and dv["imported"] == 1
+    assert os.path.exists(dv["pdf_path"])
+    assert conn.execute("SELECT name FROM clients WHERE id=?", (dv["client_id"],)).fetchone()["name"] == "SARL DRIPMOON"
+    # un second import du même numéro est refusé
+    r = c.post("/devis/import", data={"payload": json.dumps(docs)}, follow_redirects=True)
+    assert "existe déjà" in r.get_data(as_text=True)
+
+
+def test_v9_compta_exports(env):
+    appmod, db, c = env
+    cid = make_client(c)
+    fid = new_doc(c, "facture", cid, [{"designation": "Perspective", "quantity": "1", "unit_price": "500",
+                                       "vat_rate": "20"}], issue="2026-10-01")
+    c.post(f"/documents/{fid}/emettre")
+    c.post(f"/documents/{fid}/paiement", data={"date": "2026-10-20", "amount": "600", "method": "virement"})
+    conn = db.connect()
+    conn.execute("INSERT INTO purchases(supplier, invoice_number, invoice_date, total_ht, total_tva, total_ttc, "
+                 "paid_date, method) VALUES ('Spotify', 'S1', '2026-10-05', 10, 2, 12, '2026-10-05', 'carte')")
+    conn.commit()
+    import compta
+    ent = compta.entries(conn, "2026")
+    assert sum(e["debit"] for e in ent) == sum(e["credit"] for e in ent)
+    for j in ("VT", "AC", "BQ"):
+        assert sum(e["debit"] for e in ent if e["journal"] == j) == sum(e["credit"] for e in ent if e["journal"] == j)
+    r = c.get("/export/compta/recettes?annee=2026")
+    txt = r.get_data(as_text=True)
+    assert r.status_code == 200 and "20/10/2026" in txt and "600,00" in txt and "Virement" in txt
+    r = c.get("/export/compta/ecritures?annee=2026&format=sheets")
+    txt = r.get_data(as_text=True)
+    assert "2026-10-01" in txt and "706000" in txt and "500.00" in txt and "Journal," in txt
+    assert "Spotify" in c.get("/export/compta/achats?annee=2026").get_data(as_text=True)
+    assert c.get("/export").status_code == 200

@@ -1,6 +1,7 @@
 """Facturation — application web (Flask) servie dans Home Assistant via Ingress."""
 import csv
 import io
+import json
 import os
 import threading
 import time
@@ -12,11 +13,13 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template, requ
 
 import backup
 import calc
+import compta
 import db
 import debug_routes
 import importer
 import logic
 import monae
+import pdfimport
 import superpdp
 from calc import NATURES, PAYMENT_TERMS, d, money
 from pdf import fmt_date, fmt_money, fmt_qty, fmt_rate
@@ -1352,6 +1355,25 @@ def export_page():
         c.close()
 
 
+@app.route("/export/compta/<what>")
+def export_compta(what):
+    if what not in compta.EXPORTS:
+        abort(404)
+    year = request.args.get("annee") or None
+    if year and not year.isdigit():
+        abort(400)
+    fmt = "sheets" if request.args.get("format") == "sheets" else "excel"
+    c = conn()
+    try:
+        text = compta.export(c, what, year, fmt)
+    finally:
+        c.close()
+    name = f"{what}-{year or 'tout'}{'-google-sheets' if fmt == 'sheets' else ''}.csv"
+    if fmt == "sheets":
+        return send_file(io.BytesIO(text.encode("utf-8")), mimetype="text/csv", as_attachment=True, download_name=name)
+    return _csv_response(text, name)
+
+
 @app.route("/export/sauvegarde-complete.zip")
 def export_full():
     path = backup.full_zip()
@@ -1514,6 +1536,34 @@ def import_page():
             c.close()
         return render_template("import.html", report=report, job=monae.get_job())
     return render_template("import.html", report=None, job=monae.get_job())
+
+
+@app.route("/devis/import", methods=["GET", "POST"])
+def devis_import():
+    """Import de devis depuis des PDF : analyse, vérification, puis enregistrement."""
+    c = conn()
+    try:
+        if request.method == "POST" and request.form.get("payload"):
+            try:
+                docs = json.loads(request.form["payload"])
+            except ValueError:
+                docs = []
+            created, errors = pdfimport.save(c, docs)
+            c.commit()
+            for e in errors:
+                flash(e, "error")
+            if created:
+                flash(f"{len(created)} devis importé(s).", "ok")
+                return redirect(url_for("documents", kind="devis"))
+            return redirect(url_for("devis_import"))
+        docs = []
+        if request.method == "POST":
+            docs = pdfimport.stage(c, [f for f in request.files.getlist("files") if f and f.filename])
+            if not docs:
+                flash("Aucun PDF reçu.", "error")
+        return render_template("devis_import.html", docs=docs, clients=all_clients(c))
+    finally:
+        c.close()
 
 
 @app.route("/import/monae", methods=["POST"])

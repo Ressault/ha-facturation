@@ -12,7 +12,41 @@
     <div class="actions">{% for y in years %}<a class="btn small" href="{{ url_for('export_zip', year=y) }}">{{ y }}</a>{% endfor %}</div></div>
 </div>
 
-<div class="card">
+<div class="card" id="compta">
+  <div class="sec-h">Comptabilité</div>
+  <div style="display:flex; gap:var(--s4); align-items:center; flex-wrap:wrap; margin-bottom:var(--s4)">
+    <label class="small" style="display:flex; gap:var(--s2); align-items:center; margin:0">Année
+      <select id="cy" style="width:auto">{% for y in years %}<option value="{{ y }}">{{ y }}</option>{% endfor %}<option value="">Tout</option></select></label>
+    <div class="seg" id="cf"><button type="button" data-f="excel" class="on">CSV (Excel)</button><button type="button" data-f="sheets">Google Sheets</button></div>
+  </div>
+  <div class="grid g3" style="margin:0">
+    <div><h3>Écritures comptables</h3><p class="small muted">Journaux ventes, achats et banque en partie double (comptes 411, 706, 44571, 401, 606, 44566, 512), pour votre comptable ou un logiciel.</p>
+      <a class="btn small cx" data-w="ecritures" href="#">Télécharger</a></div>
+    <div><h3>Livre des recettes</h3><p class="small muted">Obligatoire en micro-entreprise : chaque encaissement, dans l'ordre, avec client, facture et mode de règlement.</p>
+      <a class="btn small cx" data-w="recettes" href="#">Télécharger</a></div>
+    <div><h3>Registre des achats</h3><p class="small muted">Vos dépenses : fournisseur, facture, HT, TVA, TTC et date de paiement.</p>
+      <a class="btn small cx" data-w="achats" href="#">Télécharger</a></div>
+  </div>
+  <p class="tiny muted" id="sheets-help" style="display:none; margin-bottom:0">Pour Google Sheets : ouvrez une feuille vierge, puis Fichier → Importer → Importer, et choisissez le fichier téléchargé (séparateur détecté automatiquement).</p>
+</div>
+<script>
+(() => {
+  const BASE = {{ url_for('export_compta', what='X')|tojson }};
+  let fmt = 'excel';
+  const sync = () => document.querySelectorAll('.cx').forEach(a => {
+    const y = document.getElementById('cy').value;
+    a.href = BASE.replace('/X', '/' + a.dataset.w) + '?' + new URLSearchParams({annee: y, format: fmt});
+  });
+  document.getElementById('cy').addEventListener('change', sync);
+  document.querySelectorAll('#cf button').forEach(b => b.addEventListener('click', () => {
+    fmt = b.dataset.f; document.querySelectorAll('#cf button').forEach(x => x.classList.toggle('on', x === b));
+    document.getElementById('sheets-help').style.display = fmt === 'sheets' ? '' : 'none'; sync();
+  }));
+  sync();
+})();
+</script>
+
+<div class="card" id="sauvegarde">
   <div class="sec-h">Sauvegarde complète</div>
   <div class="grid g2" style="margin:0">
     <div>

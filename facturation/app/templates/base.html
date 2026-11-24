@@ -20,13 +20,14 @@
   <button type="button" class="burger round" onclick="document.querySelector('.menu').classList.toggle('show')">☰</button>
   <nav class="menu">
     <div class="item {{ 'on' if ep == 'index' }}"><a href="{{ url_for('index') }}">Accueil</a></div>
-    <div class="item {{ 'on' if ep in ('documents','doc_view','doc_edit','doc_new','clients','client_form','services_page') }}">
+    <div class="item {{ 'on' if ep in ('documents','doc_view','doc_edit','doc_new','clients','client_form','services_page','devis_import') }}">
       <span>Ventes<span class="chev">▼</span></span>
       <div class="drop">
         <a href="{{ url_for('documents', kind='facture') }}">Factures</a>
         <a href="{{ url_for('documents', kind='facture', statut='brouillons') }}">Brouillons <small>à finaliser</small></a>
         <a href="{{ url_for('documents', kind='devis') }}">Devis</a>
         <a href="{{ url_for('documents', kind='facture', statut='avoirs') }}">Avoirs</a>
+        <a href="{{ url_for('devis_import') }}">Importer des devis <small>PDF</small></a>
         <hr><a href="{{ url_for('clients') }}">Clients</a>
         <a href="{{ url_for('services_page') }}">Prestations <small>prix et détails</small></a>
       </div>
@@ -48,7 +49,17 @@
         <a href="{{ URSSAF_URL }}" target="_blank" rel="noopener">autoentrepreneur.urssaf.fr <small>↗</small></a>
       </div>
     </div>
-    <div class="item {{ 'on' if ep == 'export_page' }}"><a href="{{ url_for('export_page') }}">Export</a></div>
+    <div class="item {{ 'on' if ep == 'export_page' }}">
+      <span>Export<span class="chev">▼</span></span>
+      <div class="drop">
+        <a href="{{ url_for('export_page') }}">Listes des ventes et des achats <small>CSV</small></a>
+        <a href="{{ url_for('export_page') }}#compta">Export comptable <small>écritures</small></a>
+        <a href="{{ url_for('export_page') }}#compta">Livre des recettes</a>
+        <a href="{{ url_for('export_page') }}#compta">Registre des achats</a>
+        <hr><a href="{{ url_for('export_page') }}">Archives PDF</a>
+        <a href="{{ url_for('export_page') }}#sauvegarde">Sauvegarde complète</a>
+      </div>
+    </div>
     <div class="item {{ 'on' if ep in ('settings_page','import_page') }}">
       <span>Réglages<span class="chev">▼</span></span>
       <div class="drop">
@@ -57,6 +68,7 @@
         <a href="{{ url_for('settings_page') }}#declarations">TVA et URSSAF</a>
         <a href="{{ url_for('settings_page') }}#pdp">Plateforme agréée</a>
         <hr><a href="{{ url_for('import_page') }}">Import MonAE</a>
+        <a href="{{ url_for('devis_import') }}">Import de devis PDF</a>
       </div>
     </div>
     <div class="item plus"><span>＋ Nouveau</span>
