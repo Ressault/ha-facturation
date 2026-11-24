@@ -203,7 +203,11 @@ def forecast(conn, open_invoices, months=12):
 
     to_pay = {k: 0.0 for k in keys}
     pay_late = 0.0
-    unpaid = conn.execute("SELECT * FROM purchases WHERE COALESCE(draft,0)=0 AND paid_date IS NULL").fetchall()
+    # dépenses sans date de paiement sur les 12 derniers mois (les plus anciennes sont presque toujours réglées
+    # mais non pointées : elles fausseraient la prévision)
+    since = f"{today.year - 1:04d}-{today.month:02d}-01"
+    unpaid = conn.execute("SELECT * FROM purchases WHERE COALESCE(draft,0)=0 AND paid_date IS NULL "
+                          "AND COALESCE(invoice_date, '') >= ?", (since,)).fetchall()
     for p in unpaid:
         k = _month_key(p["invoice_date"] or cur)
         if k < cur:

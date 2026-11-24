@@ -280,7 +280,11 @@ def test_monae_import(env, monkeypatch):
     ]
     quotes = [{"id": 50, "customer_id": 10, "quote_ref": 12, "invoiced_on": "2026-10-01", "term_on": "2026-11-01",
                "total": "300.0", "total_with_vat": "360.0", "quote_status": 0, "draft": False,
-               "items": [{"position": 1, "title": "Devis rendu", "quantity": "1", "unit_price": "300", "vat": "0.200"}]}]
+               "items": [{"position": 1, "title": "Devis rendu", "quantity": "1", "unit_price": "300", "vat": "0.200"}]},
+              # même numéro qu'une facture : ne doit jamais l'écraser
+              {"id": 1, "customer_id": 11, "quote_ref": "202609-41", "invoiced_on": "2026-08-01", "total": "5000.0",
+               "total_with_vat": "6000.0", "quote_status": 1, "draft": False,
+               "items": [{"position": 1, "title": "Musée", "quantity": "1", "unit_price": "5000", "vat": "0.200"}]}]
     suppliers = [{"id": 70, "company_name": "Spotify", "city": "Stockholm"}, {"id": 71, "company_name": "Autodesk"}]
     purchases = [{"id": 80, "supplier_id": 70, "title": "abonnement spotify", "invoiced_on": "2026-10-23",
                   "paid_on": "2026-10-23", "payment_mode": 1, "total": "9.27", "total_with_vat": "11.12", "vat_amount": "1.85"},
@@ -323,7 +327,7 @@ def test_monae_import(env, monkeypatch):
     r = job["report"]
 
     assert (r["clients"], r["invoices"], r["avoirs"], r["approx"]) == (2, 2, 1, 0), r
-    assert (r["drafts"], r["quotes"], r["suppliers"], r["purchases"], r["recurring"], r["moved"]) == (1, 1, 2, 2, 1, 1), r
+    assert (r["drafts"], r["quotes"], r["suppliers"], r["purchases"], r["recurring"], r["moved"]) == (1, 2, 2, 2, 1, 1), r
     assert r["numbering"]["pattern"] == "{AAAA}{MM}-{N}" and r["numbering"]["next"] == 44
     conn = db.connect()
     docs = {d["number"]: d for d in conn.execute("SELECT * FROM documents").fetchall()}
@@ -339,14 +343,17 @@ def test_monae_import(env, monkeypatch):
     assert kinds == [("title", None), ("item", "bnc"), ("comment", None)]
     item = conn.execute("SELECT * FROM lines WHERE document_id=? AND kind='item'", (draft["id"],)).fetchone()
     assert item["designation"] == "Rendu nuit" and item["description"] == "Vue piscine"
-    assert conn.execute("SELECT COUNT(*) FROM documents WHERE kind='devis'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM documents WHERE kind='devis'").fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM clients WHERE name='Autodesk'").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM purchases").fetchone()[0] == 2
     # relancer l'import : aucun doublon, documents complétés
     monae._run(monae.Api("u", "k"), None, True)
     r2 = monae.get_job()["report"]
     assert r2["invoices"] == 0 and r2["purchases"] == 0 and r2["drafts"] == 0 and r2["refreshed"] >= 4, r2
-    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 5
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 6
+    inv = conn.execute("SELECT * FROM documents WHERE number='202609-41'").fetchone()
+    assert inv["total_ttc"] == 1200 and inv["kind"] == "facture"
+    assert conn.execute("SELECT total_ttc FROM documents WHERE number='MONAE-D202609-41'").fetchone()[0] == 6000
     # numérotation continue
     import logic
     assert logic.preview_number(conn, "facture", "2026-11-20") == "202611-44"

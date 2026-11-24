@@ -83,6 +83,11 @@ def start(login, key, firm_id=None, with_pdfs=True):
 
     def run():
         try:
+            try:
+                import backup
+                backup.snapshot("avant-import-monae-" + time.strftime("%Y%m%d-%H%M%S"))
+            except Exception:  # noqa: BLE001
+                pass
             _run(Api(login, key), firm_id, with_pdfs)
         except Exception as e:  # noqa: BLE001
             set_job(status="error", error=str(e))
@@ -247,13 +252,22 @@ def import_invoice(conn, api, inv, client_map, with_pdfs, report, kind_hint=None
     extra_cols = {"payment_terms": terms, "penalty_rate": _num_or_none(inv.get("penalty")),
                   "discount_rate": _num_or_none(inv.get("discount")), "monae_id": inv.get("id")}
 
-    existing = conn.execute("SELECT id, imported, status FROM documents WHERE monae_id = ? AND kind = ?",
-                            (inv.get("id"), kind)).fetchone()
-    if not existing and ref and not draft:
-        existing = conn.execute("SELECT id, imported, status FROM documents WHERE number = ? AND kind = ?",
-                                (ref if not is_quote else f"MONAE-D{ref}", kind)).fetchone() or \
-            conn.execute("SELECT id, imported, status FROM documents WHERE number = ? AND kind IN ('facture','avoir')",
-                         (ref,)).fetchone()
+    # Recherche du document déjà importé. Un devis ne doit JAMAIS être rapproché d'une facture : les numéros de
+    # devis MonAE (1, 2, 3…) recoupent ceux des factures. Pour une facture émise, le numéro fait foi.
+    existing = None
+    if is_quote:
+        existing = conn.execute("SELECT id, imported, status FROM documents WHERE monae_id = ? AND kind = 'devis'",
+                                (inv.get("id"),)).fetchone()
+        if not existing and ref:
+            existing = conn.execute("SELECT id, imported, status FROM documents WHERE number = ? AND kind = 'devis'",
+                                    (f"MONAE-D{ref}",)).fetchone()
+    else:
+        if ref and not draft:
+            existing = conn.execute("SELECT id, imported, status FROM documents WHERE number = ? "
+                                    "AND kind IN ('facture','avoir')", (ref,)).fetchone()
+        if not existing and draft:
+            existing = conn.execute("SELECT id, imported, status FROM documents WHERE monae_id = ? AND kind = ? "
+                                    "AND status = 'brouillon'", (inv.get("id"), kind)).fetchone()
     if existing:
         if not existing["imported"] and existing["status"] != "brouillon":
             report["skipped"] += 1
