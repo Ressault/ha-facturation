@@ -57,13 +57,20 @@ def parse_text(text):
            "client": {"name": "", "address": "", "post_code": "", "city": "", "siren": ""},
            "lines": [], "total_ht": None, "total_tva": None, "total_ttc": None, "warnings": []}
     full = "\n".join(rows)
-    m = re.search(r"\b(DEVIS|FACTURE|AVOIR)\s*N°\s*:?\s*(\S+)", full, re.I)
-    if m:
-        out["kind"] = {"DEVIS": "devis", "FACTURE": "facture", "AVOIR": "avoir"}[m.group(1).upper()]
-        out["number"] = m.group(2)
-    m = re.search(r"^Date(?: d'émission| du devis)?\s*:\s*(.+)$", full, re.M | re.I)
-    out["issue_date"] = fr_date(m.group(1)) if m else None
-    m = re.search(r"(?:validité|Valable jusqu'au|Date de fin de validité)\s*:?\s*(.+)$", full, re.M | re.I)
+    # le titre du document (« DEVIS N° 72 ») : en majuscules, et le dernier trouvé (le bon de commande
+    # ou le corps du texte peuvent citer un autre numéro avant)
+    ms = re.findall(r"^(DEVIS|FACTURE|AVOIR)\s*N°\s*:?\s*(\S+)\s*$", full, re.M) or \
+        re.findall(r"\b(DEVIS|FACTURE|AVOIR)\s*N°\s*:?\s*([^\s)]+)", full, re.I)
+    if ms:
+        word, number = ms[-1]
+        out["kind"] = {"DEVIS": "devis", "FACTURE": "facture", "AVOIR": "avoir"}[word.upper()]
+        out["number"] = number
+    # « Date : » peut aussi apparaître vide (bloc « Bon pour accord ») : on prend la première date lisible
+    for dm in re.finditer(r"^Date(?: d'émission| du devis)?[ \t]*:[ \t]*(.*)$", full, re.M | re.I):
+        if fr_date(dm.group(1)):
+            out["issue_date"] = fr_date(dm.group(1))
+            break
+    m = re.search(r"(?:validité|Valable jusqu'au|Date de fin de validité)[ \t]*:?[ \t]*(.+)$", full, re.M | re.I)
     if m:
         out["validity_date"] = fr_date(m.group(1))
     m = re.search(r"^Objet\s*:\s*(.+)$", full, re.M)

@@ -42,8 +42,8 @@ def register(app, conn):
         try:
             start, count = int(request.args.get("start") or 0), int(request.args.get("count") or 60)
             rows = c.execute("SELECT id, number, total_ht, total_ttc, issue_date, pdf_path FROM documents "
-                             "WHERE pdf_path IS NOT NULL AND imported=1 ORDER BY id LIMIT ? OFFSET ?",
-                             (count, start)).fetchall()
+                             "WHERE pdf_path IS NOT NULL AND (imported=1 OR ?) ORDER BY id LIMIT ? OFFSET ?",
+                             (1 if request.args.get("tous") else 0, count, start)).fetchall()
             bad, ok, warn = [], 0, 0
             for r in rows:
                 try:
@@ -56,13 +56,13 @@ def register(app, conn):
                                     (r["id"],)).fetchone()[0]
                 pi = sum(1 for ln in p["lines"] if ln["kind"] == "item")
                 probs = []
-                if p["number"] != r["number"]:
+                if p["number"] != r["number"] and f"MONAE-D{p['number']}" != r["number"]:
                     probs.append(f"num {p['number']}")
                 if p["issue_date"] != r["issue_date"]:
                     probs.append(f"date {p['issue_date']}")
-                if p["total_ht"] is None or abs(float(p["total_ht"]) - r["total_ht"]) > 0.01:
+                if p["total_ht"] is None or abs(abs(float(p["total_ht"])) - abs(r["total_ht"])) > 0.01:
                     probs.append(f"ht {p['total_ht']}")
-                if p["total_ttc"] is None or abs(float(p["total_ttc"]) - r["total_ttc"]) > 0.01:
+                if p["total_ttc"] is None or abs(abs(float(p["total_ttc"])) - abs(r["total_ttc"])) > 0.01:
                     probs.append(f"ttc {p['total_ttc']}")
                 if pi != n_items:
                     probs.append(f"items {pi}/{n_items}")
