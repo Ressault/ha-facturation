@@ -1,5 +1,5 @@
 name: Facturation
-version: "2.9.4"
+version: "2.9.5"
 slug: facturation
 description: Devis, factures, TVA mensuelle et facturation électronique (SUPER PDP) pour micro-entrepreneur
 url: https://github.com/Ressault/ha-facturation

@@ -850,5 +850,5 @@ def test_v9_quote_pdf_mentions(env):
     import pdfimport
     text = pdfimport.pdf_text(open(dv["pdf_path"], "rb").read())
     assert "Conditions de règlement appliquées sur les factures" in text
-    assert "Date limite de règlement" in text and "40 €" in text
+    assert "Date limite de règlement" in text and "40,00 €" in text and "BCE" in text
     assert f"BON DE COMMANDE – DEVIS N° {dv['number']}" in text and "Nom et qualité" in text and "Bon pour accord" in text

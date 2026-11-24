@@ -144,9 +144,10 @@ DEFAULT_SETTINGS = {
     "payment_days": "30",
     "devis_validity_days": "30",
     "default_vat_rate": "20",
-    "late_penalty": "Pénalités de retard : 3 fois le taux d'intérêt légal",
-    "recovery_fee": "Indemnité forfaitaire pour frais de recouvrement en cas de retard de paiement : 40 €",
-    "discount_terms": "Pas d'escompte pour paiement anticipé",
+    "late_penalty": "Taux des pénalités en cas de retard de paiement : taux directeur de refinancement de la BCE, "
+                    "majoré de 10 points",
+    "recovery_fee": "En cas de retard de paiement, indemnité forfaitaire légale pour frais de recouvrement : 40,00 €",
+    "discount_terms": "Escompte en cas de paiement anticipé : aucun",
     "footer_note": "",
     "ca3_due_day": "19",
     "pdp_client_id": "",
@@ -281,6 +282,19 @@ SERVICES_SEED = [
 ]
 
 
+OLD_MENTIONS = {
+    "late_penalty": "Pénalités de retard : 3 fois le taux d'intérêt légal",
+    "recovery_fee": "Indemnité forfaitaire pour frais de recouvrement en cas de retard de paiement : 40 €",
+    "discount_terms": "Pas d'escompte pour paiement anticipé",
+}
+
+
+def update_mentions(conn):
+    """Mentions reprises de MonAE : remplace les anciens textes par défaut (jamais un texte modifié à la main)."""
+    for k, old in OLD_MENTIONS.items():
+        conn.execute("UPDATE settings SET value = ? WHERE key = ? AND value = ?", (DEFAULT_SETTINGS[k], k, old))
+
+
 def seed_first_name(conn):
     """Prénom de l'accueil : renseigné une fois d'après le nom de l'entreprise s'il contient « Antonin »."""
     cur = conn.execute("SELECT value FROM settings WHERE key = 'first_name'").fetchone()
@@ -339,6 +353,7 @@ def init_db():
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         for k, v in DEFAULT_SETTINGS.items():
             conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
+        update_mentions(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_kind_date ON documents(kind, issue_date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_pay_date ON payments(date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_lines_doc ON lines(document_id)")

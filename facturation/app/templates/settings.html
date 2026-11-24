@@ -54,7 +54,7 @@
   <div class="fields">
     <div><label>Conditions de règlement</label><select name="default_payment_terms">
       {% for v, l in PAYMENT_TERMS %}<option value="{{ v }}" {{ 'selected' if s.default_payment_terms == v }}>{{ l }}</option>{% endfor %}</select></div>
-    <div><label>Pénalités de retard (% par an)</label><input name="default_penalty_rate" value="{{ s.default_penalty_rate }}" placeholder="vide = 3× le taux légal"></div>
+    <div><label>Pénalités de retard (% par an)</label><input name="default_penalty_rate" value="{{ s.default_penalty_rate }}" placeholder="vide = texte ci-dessous (BCE + 10 points)"></div>
     <div><label>Escompte (%)</label><input name="default_discount_rate" value="{{ s.default_discount_rate }}" placeholder="vide = pas d'escompte"></div>
     <div><label>Taux de TVA</label><input name="default_vat_rate" value="{{ s.default_vat_rate }}"></div>
     <div><label>Nature de vos prestations</label><select name="default_nature">

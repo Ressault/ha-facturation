@@ -49,7 +49,7 @@ def penalty_text(doc, seller):
         rate = seller.get("default_penalty_rate")
     if rate not in (None, ""):
         return f"Pénalités de retard : {fmt_qty(rate)} % par an, exigibles dès le lendemain de l'échéance."
-    return seller.get("late_penalty") or "Pénalités de retard : 3 fois le taux d'intérêt légal."
+    return seller.get("late_penalty") or "Taux des pénalités en cas de retard de paiement : taux directeur de refinancement de la BCE, majoré de 10 points"
 
 
 MOIS_LONG = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre",
@@ -80,7 +80,7 @@ def discount_text(doc, seller):
         rate = seller.get("default_discount_rate")
     if rate not in (None, "") and d(rate) > 0:
         return f"Escompte pour paiement anticipé : {fmt_qty(rate)} %."
-    return seller.get("discount_terms") or "Pas d'escompte pour paiement anticipé."
+    return seller.get("discount_terms") or "Escompte en cas de paiement anticipé : aucun"
 
 
 class DocPDF(FPDF):
