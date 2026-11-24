@@ -15,7 +15,7 @@ from pypdf import PdfReader
 MONTHS = {"janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6, "juillet": 7,
           "août": 8, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11, "décembre": 12, "decembre": 12}
 
-AMOUNT = r"-?\d{1,3}(?:[   ]?\d{3})*(?:,\d{1,4})?"
+AMOUNT = r"-?(?:[1-9]\d{0,2}(?:[ \u00a0\u202f]\d{3})+|[1-9]\d*|0)(?:,\d{1,4})?"
 ITEM_RE = re.compile(
     rf"^(?:(?P<label>.*?)\s+)?(?:(?P<rate>\d{{1,2}}(?:[.,]\d+)?)\s*%\s+)?(?P<pu>{AMOUNT})\s*€\s+"
     rf"(?P<qty>-?\d+(?:[.,]\d+)?)(?:\s*(?P<unit>[A-Za-zéèû²³.]{{1,6}}))?\s+(?P<total>{AMOUNT})\s*€\s*$")
@@ -123,7 +123,7 @@ def parse_text(text):
             lines.append({"kind": "title", "designation": ln})
     # Remise globale (« Remise (10,00%) -22,00 € ») : ajoutée comme ligne négative.
     rate0 = next((ln["vat_rate"] for ln in lines if ln["kind"] == "item"), Decimal("0"))
-    for m in re.finditer(rf"^Remise(?:\s*\(([\d.,]+)\s*%\))?\s+({AMOUNT})\s*€", full, re.M):
+    for m in re.finditer(rf"^Remise(?:\s*\(([\d.,]+)\s*%\))?\s+({AMOUNT})\s*€\s*$", full, re.M):
         val = amount(m.group(2))
         if val:
             val = -abs(val)

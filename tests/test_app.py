@@ -781,3 +781,33 @@ def test_v9_compta_exports(env):
     assert "2026-10-01" in txt and "706000" in txt and "500.00" in txt and "Journal," in txt
     assert "Spotify" in c.get("/export/compta/achats?annee=2026").get_data(as_text=True)
     assert c.get("/export").status_code == 200
+
+
+def test_v9_stats_pages(env):
+    appmod, db, c = env
+    cid = make_client(c)
+    fid = new_doc(c, "facture", cid, [{"designation": "Perspective extérieure", "quantity": "2", "unit_price": "450",
+                                       "vat_rate": "20"}, {"designation": "Visite virtuelle 360°", "quantity": "1",
+                                       "unit_price": "500", "vat_rate": "20"}])
+    c.post(f"/documents/{fid}/emettre")
+    new_doc(c, "devis", cid, [{"designation": "Plan de masse", "quantity": "1", "unit_price": "200", "vat_rate": "20"}])
+    conn = db.connect()
+    conn.execute("INSERT INTO purchases(supplier, invoice_date, total_ht, total_tva, total_ttc) "
+                 "VALUES ('Spotify', date('now'), 10, 2, 12)")
+    conn.commit()
+    import stats
+    y = date.today().year
+    st = stats.statistics(conn, y)
+    assert round(st["total"]["ca"], 2) == 1400 and st["total"]["achats"] == 10 and round(st["total"]["benefice"], 2) == 1390
+    recs = stats.sales(conn, "facture", f"{y}-01-01", f"{y + 1}-01-01")
+    acts = stats.breakdown(recs, "activite")
+    assert {r["name"]: round(r["value"]) for r in acts["rows"]} == {"Perspectives extérieures": 900,
+                                                                     "Visites virtuelles 360°": 500}
+    for url in ["/statistiques", "/statistiques?affichage=trimestre&ventilation=encaisse",
+                "/statistiques?affichage=annee", "/statistiques?categorie=Cyclorama", "/previsionnel",
+                "/ventilation-ca", "/ventilation-ca?ventilation=encaisse&periode=tout", "/ventilation-achats"]:
+        r = c.get(url)
+        assert r.status_code == 200, url
+    assert "Spotify" in c.get("/ventilation-achats").get_data(as_text=True)
+    html = c.get("/previsionnel").get_data(as_text=True)
+    assert "400,00" in html and "Prestation test" in html

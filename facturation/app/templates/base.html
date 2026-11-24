@@ -19,7 +19,16 @@
   <a class="brand" href="{{ url_for('index') }}"><span class="logo">€</span><span class="hide-m">Facturation</span></a>
   <button type="button" class="burger round" onclick="document.querySelector('.menu').classList.toggle('show')">☰</button>
   <nav class="menu">
-    <div class="item {{ 'on' if ep == 'index' }}"><a href="{{ url_for('index') }}">Accueil</a></div>
+    <div class="item {{ 'on' if ep in ('index','statistiques','previsionnel','ventilation_ca','ventilation_achats') }}">
+      <span>Accueil<span class="chev">▼</span></span>
+      <div class="drop">
+        <a href="{{ url_for('index') }}">Tableau de bord</a>
+        <hr><a href="{{ url_for('statistiques') }}">Statistiques</a>
+        <a href="{{ url_for('previsionnel') }}">Prévisionnel</a>
+        <a href="{{ url_for('ventilation_ca') }}">Ventilation du CA</a>
+        <a href="{{ url_for('ventilation_achats') }}">Ventilation des achats</a>
+      </div>
+    </div>
     <div class="item {{ 'on' if ep in ('documents','doc_view','doc_edit','doc_new','clients','client_form','services_page','devis_import') }}">
       <span>Ventes<span class="chev">▼</span></span>
       <div class="drop">

@@ -20,6 +20,7 @@ import importer
 import logic
 import monae
 import pdfimport
+import stats
 import superpdp
 from calc import NATURES, PAYMENT_TERMS, d, money
 from pdf import fmt_date, fmt_money, fmt_qty, fmt_rate
@@ -1536,6 +1537,75 @@ def import_page():
             c.close()
         return render_template("import.html", report=report, job=monae.get_job())
     return render_template("import.html", report=None, job=monae.get_job())
+
+
+def _first_year(c):
+    r = c.execute("SELECT MIN(substr(issue_date,1,4)) y FROM documents WHERE issue_date IS NOT NULL").fetchone()
+    return int(r["y"]) if r and r["y"] else date.today().year
+
+
+@app.route("/statistiques")
+def statistiques():
+    a = request.args
+    today = date.today()
+    year = int(a.get("annee") or today.year) if (a.get("annee") or "").isdigit() or not a.get("annee") else today.year
+    mode = "encaisse" if a.get("ventilation") == "encaisse" else "facture"
+    step = a.get("affichage") if a.get("affichage") in ("mois", "trimestre", "annee") else "mois"
+    compare = a.get("comparaison", "n-1") != "aucune"
+    cat = a.get("categorie") or ""
+    c = conn()
+    try:
+        fy = _first_year(c)
+        data = stats.statistics(c, year, mode, step, compare, cat, first_year=fy)
+        f = {"annee": year, "ventilation": mode, "affichage": step, "comparaison": "n-1" if compare else "aucune",
+             "categorie": cat}
+        return render_template("stats.html", page="stats", data=data, f=f,
+                               years=list(range(today.year, fy - 1, -1)),
+                               categories=[n for n, _ in stats.ACTIVITIES] + [stats.OTHER])
+    finally:
+        c.close()
+
+
+@app.route("/previsionnel")
+def previsionnel():
+    c = conn()
+    try:
+        data = stats.forecast(c, open_invoices(c))
+        return render_template("stats.html", page="prev", data=data, f={})
+    finally:
+        c.close()
+
+
+def _vent_filters(a):
+    return {"periode": period_choice(a.get("periode") or f"a-{date.today().year}"), "du": a.get("du", ""),
+            "au": a.get("au", ""), "ventilation": "encaisse" if a.get("ventilation") == "encaisse" else "facture"}
+
+
+@app.route("/ventilation-ca")
+def ventilation_ca():
+    f = _vent_filters(request.args)
+    start, end = period_range(f["periode"], f["du"] or None, f["au"] or None)
+    c = conn()
+    try:
+        recs = stats.sales(c, f["ventilation"], start, end)
+        return render_template("stats.html", page="vca", f=f, data={
+            "clients": stats.breakdown(recs, "client"), "activites": stats.breakdown(recs, "activite"),
+            "ttc": sum(r["ttc"] for r in recs)})
+    finally:
+        c.close()
+
+
+@app.route("/ventilation-achats")
+def ventilation_achats():
+    f = _vent_filters(request.args)
+    start, end = period_range(f["periode"], f["du"] or None, f["au"] or None)
+    c = conn()
+    try:
+        recs = stats.purchases(c, start, end)
+        return render_template("stats.html", page="vach", f=f, data={
+            "fournisseurs": stats.breakdown(recs, "fournisseur"), "ttc": sum(r["ttc"] for r in recs)})
+    finally:
+        c.close()
 
 
 @app.route("/devis/import", methods=["GET", "POST"])
