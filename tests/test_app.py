@@ -818,3 +818,24 @@ def test_v9_stats_pages(env):
     assert "Spotify" in c.get("/ventilation-achats").get_data(as_text=True)
     html = c.get("/previsionnel").get_data(as_text=True)
     assert "400,00" in html and "Prestation test" in html
+
+
+def test_v9_duplicate_draft_from_editor(env):
+    appmod, db, c = env
+    cid = make_client(c)
+    did = new_doc(c, "facture", cid, [{"designation": "Insertion", "quantity": "2", "unit_price": "75", "vat_rate": "20"}])
+    assert "Dupliquer en devis" in c.get(f"/documents/{did}/modifier").get_data(as_text=True)
+    from werkzeug.datastructures import MultiDict
+    form = MultiDict([("id", str(did)), ("kind", "facture"), ("client_id", str(cid)), ("issue_date", date.today().isoformat()),
+                      ("subject", "Modifié"), ("designation", "Insertion"), ("description", ""), ("quantity", "3"),
+                      ("unit", ""), ("unit_price", "75"), ("vat_rate", "20"), ("action", "dupliquer-devis")])
+    r = c.post("/documents/enregistrer", data=form)
+    assert r.status_code == 302 and "/modifier" in r.headers["Location"]
+    conn = db.connect()
+    src = conn.execute("SELECT * FROM documents WHERE id=?", (did,)).fetchone()
+    dv = conn.execute("SELECT * FROM documents WHERE kind='devis'").fetchone()
+    assert src["status"] == "brouillon" and src["total_ht"] == 225  # brouillon enregistré tel qu'affiché
+    assert dv["number"].startswith("D-") and dv["total_ht"] == 225 and dv["subject"] == "Modifié"
+    form["action"] = "dupliquer-facture"
+    c.post("/documents/enregistrer", data=form)
+    assert conn.execute("SELECT COUNT(*) FROM documents WHERE kind='facture' AND status='brouillon'").fetchone()[0] == 2

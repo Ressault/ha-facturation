@@ -12,6 +12,8 @@
     <div class="pop">
       <button type="submit" formaction="{{ url_for('doc_preview') }}" formtarget="_blank" formnovalidate>Aperçu PDF</button>
       {% if doc.id %}
+      <button type="submit" name="action" value="dupliquer-facture">Dupliquer en facture</button>
+      <button type="submit" name="action" value="dupliquer-devis">Dupliquer en devis</button>
       <hr>
       <button type="submit" form="delform" class="danger">{{ 'Supprimer le devis' if is_devis else 'Supprimer le brouillon' }}</button>
       {% endif %}

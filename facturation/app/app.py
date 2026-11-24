@@ -721,6 +721,13 @@ def doc_save():
         doc_id = logic.save_document(c, doc_id, f.to_dict(), lines)
         if f.get("action") == "valider":
             logic.validate_document(c, doc_id)
+        if f.get("action") in ("dupliquer-facture", "dupliquer-devis"):
+            # le brouillon est enregistré tel qu'affiché, puis copié
+            new_id, kind = _duplicate(c, doc_id, f["action"].split("-")[1])
+    if f.get("action") in ("dupliquer-facture", "dupliquer-devis"):
+        flash("Modifications enregistrées. " + ("Copie créée en facture brouillon." if kind == "facture"
+                                                else "Copie créée en devis."), "ok")
+        return redirect(url_for("doc_edit", doc_id=new_id))
     if f.get("action") == "valider":
         return after_validation(doc_id)
     flash("Brouillon enregistré." if f.get("kind") != "devis" else "Devis enregistré.", "ok")
@@ -875,19 +882,23 @@ def doc_to_avoir(doc_id):
 @app.route("/documents/<int:doc_id>/dupliquer", methods=["POST"])
 def doc_duplicate(doc_id):
     with db.transaction() as c:
-        doc, _ = logic.get_doc(c, doc_id)
-        target = request.form.get("en")
-        kind = target if target in ("facture", "devis") else ("devis" if doc["kind"] == "devis" else "facture")
-        new_id = logic.duplicate_as(c, doc_id, kind)
-        s = db.get_settings(c)
-        terms = doc.get("payment_terms") or s.get("default_payment_terms") or "30-inv"
-        c.execute("UPDATE documents SET due_date=?, avoir_of_id=NULL WHERE id=?",
-                  (logic.due_date_for(date.today().isoformat(), terms), new_id))
-        if kind == "devis":
-            n = logic.next_number(c, "devis", date.today().isoformat())
-            c.execute("UPDATE documents SET number=?, status='en_attente', source_devis_id=NULL WHERE id=?", (n, new_id))
+        new_id, kind = _duplicate(c, doc_id, request.form.get("en"))
     flash("Copie créée en facture brouillon." if kind == "facture" else "Copie créée en devis.", "ok")
     return redirect(url_for("doc_edit", doc_id=new_id))
+
+
+def _duplicate(c, doc_id, target):
+    doc, _ = logic.get_doc(c, doc_id)
+    kind = target if target in ("facture", "devis") else ("devis" if doc["kind"] == "devis" else "facture")
+    new_id = logic.duplicate_as(c, doc_id, kind)
+    s = db.get_settings(c)
+    terms = doc.get("payment_terms") or s.get("default_payment_terms") or "30-inv"
+    c.execute("UPDATE documents SET due_date=?, avoir_of_id=NULL WHERE id=?",
+              (logic.due_date_for(date.today().isoformat(), terms), new_id))
+    if kind == "devis":
+        n = logic.next_number(c, "devis", date.today().isoformat())
+        c.execute("UPDATE documents SET number=?, status='en_attente', source_devis_id=NULL WHERE id=?", (n, new_id))
+    return new_id, kind
 
 
 @app.route("/documents/<int:doc_id>/statut-devis", methods=["POST"])
